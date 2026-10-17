@@ -44,7 +44,7 @@ const MAX_QUICK_RESTARTS = 5;
  * Live transcript of the user talking, saved per prompt.
  *
  * Client-only: it reads localStorage and feature-detects during its first
- * render, so mount it after hydration (see VoicePanel) and key it by `slug`.
+ * render, so mount it after hydration (see VoiceDock) and key it by `slug`.
  */
 export function useSpeechTranscript(slug: string): SpeechTranscript {
   const [supported] = useState(() => getRecognitionCtor() !== null);

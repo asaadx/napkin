@@ -1,15 +1,24 @@
 import type { Difficulty } from "@/lib/prompts";
 
-const STYLES: Record<Difficulty, string> = {
-  easy: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  medium: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  hard: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300",
+const COLOR: Record<Difficulty, string> = {
+  easy: "text-easy",
+  medium: "text-medium",
+  hard: "text-hard",
 };
 
-export function DifficultyBadge({ difficulty }: { difficulty: Difficulty }) {
+/** Difficulty as colored text, optionally outlined in its own color (Refined style). */
+export function DifficultyBadge({
+  difficulty,
+  outlined = true,
+}: {
+  difficulty: Difficulty;
+  outlined?: boolean;
+}) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize ${STYLES[difficulty]}`}
+      className={`inline-flex items-center text-[12.5px] font-medium capitalize ${COLOR[difficulty]} ${
+        outlined ? "rounded-full px-[9px] py-px shadow-[inset_0_0_0_1px_currentColor]" : ""
+      }`}
     >
       {difficulty}
     </span>

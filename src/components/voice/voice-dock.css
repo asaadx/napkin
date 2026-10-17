@@ -1,0 +1,176 @@
+/*
+ * Motion for the voice dock (plain CSS: this project's Turbopack
+ * rule turns *.module.css into global CSS, so classes are prefixed vd-). Static layout and color live in Tailwind classes;
+ * this file holds the state-driven transitions and keyframes. Only transform and
+ * opacity animate. Keyboard toggles (M / T) set data-instant and skip motion.
+ */
+
+.vd-dock {
+  --dock-ease: var(--ease-out-quint, cubic-bezier(0.23, 1, 0.32, 1));
+}
+
+/* The pill rises in once, after hydration. */
+.vd-pill {
+  animation: vd-rise 240ms var(--dock-ease) backwards;
+}
+
+@keyframes vd-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* Press feedback for every button in the dock. */
+.vd-press {
+  transition:
+    transform 140ms var(--dock-ease),
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.vd-press:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Mic / stop icons crossfade in the same cell. */
+.vd-mic-icon {
+  grid-area: 1 / 1;
+  transition:
+    opacity 160ms ease-out,
+    transform 200ms var(--dock-ease);
+}
+.vd-dock:not([data-rec]) .vd-icon-stop,
+.vd-dock[data-rec] .vd-icon-mic {
+  opacity: 0;
+  transform: scale(0.5);
+}
+
+/* Pulsing ring around the stop button while recording. */
+.vd-ring {
+  opacity: 0;
+}
+.vd-dock[data-rec] .vd-ring {
+  animation: vd-ring 1.8s var(--dock-ease) infinite;
+}
+@keyframes vd-ring {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+/* Label and waveform share a slot and crossfade. */
+.vd-slot-label,
+.vd-wave {
+  transition: opacity 200ms ease-out;
+}
+.vd-wave {
+  opacity: 0;
+}
+.vd-dock[data-rec] .vd-wave {
+  opacity: 1;
+}
+.vd-dock[data-rec] .vd-slot-label {
+  opacity: 0;
+}
+
+.vd-chev {
+  transition: transform 200ms var(--dock-ease);
+}
+.vd-dock[data-open] .vd-chev {
+  transform: rotate(180deg);
+}
+
+/* Transcript panel: grows up out of the pill. Exit is faster than enter. */
+.vd-panel {
+  transform-origin: bottom center;
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 140ms ease-out,
+    transform 160ms ease-out,
+    visibility 0s linear 160ms;
+}
+.vd-dock[data-open] .vd-panel {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 200ms ease-out,
+    transform 240ms var(--dock-ease),
+    visibility 0s;
+}
+
+/* One-line live caption above the collapsed pill. */
+.vd-caption {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 180ms ease-out,
+    transform 200ms var(--dock-ease);
+}
+.vd-dock[data-rec][data-cap]:not([data-open]) .vd-caption {
+  opacity: 1;
+  transform: none;
+}
+
+/* Error bubble above the pill. */
+.vd-alert {
+  animation: vd-rise 200ms var(--dock-ease) backwards;
+}
+
+.vd-live-dot {
+  animation: vd-pulse 1.2s ease-in-out infinite;
+}
+.vd-caret {
+  animation: vd-pulse 1s steps(1) infinite;
+}
+@keyframes vd-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Keyboard toggles are instant. */
+.vd-dock[data-instant] * {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Movement goes; fades stay so state changes still read. */
+  .vd-pill,
+  .vd-alert,
+  .vd-ring,
+  .vd-live-dot,
+  .vd-caret {
+    animation: none;
+  }
+  .vd-dock[data-rec] .vd-ring {
+    animation: none;
+    opacity: 0.4;
+  }
+  .vd-panel,
+  .vd-dock[data-open] .vd-panel,
+  .vd-caption,
+  .vd-dock[data-rec][data-cap]:not([data-open]) .vd-caption,
+  .vd-mic-icon,
+  .vd-dock:not([data-rec]) .vd-icon-stop,
+  .vd-dock[data-rec] .vd-icon-mic {
+    transform: none;
+  }
+  .vd-chev,
+  .vd-press {
+    transition-property: background-color, color;
+  }
+  .vd-press:active:not(:disabled) {
+    transform: none;
+  }
+}

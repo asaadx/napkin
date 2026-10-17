@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import "@excalidraw/excalidraw/index.css";
 import type { ExcalidrawElementSkeleton } from "@excalidraw/excalidraw/data/transform";
@@ -17,6 +16,7 @@ import type {
   ExcalidrawLinearElement,
 } from "@excalidraw/excalidraw/element/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import { useTheme } from "@/components/theme/useTheme";
 import { detectArrowhead, detectCylinder, recognizeShape } from "@/lib/shapes";
 import {
   elementPointsToScene,
@@ -33,7 +33,7 @@ const Excalidraw = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+      <div className="flex h-full items-center justify-center text-[13px] text-fg-3">
         Loading canvas…
       </div>
     ),
@@ -80,20 +80,6 @@ function loadSmartShapes(): boolean {
   }
 }
 
-function subscribeDark(cb: () => void) {
-  const mq = window.matchMedia("(prefers-color-scheme: dark)");
-  mq.addEventListener("change", cb);
-  return () => mq.removeEventListener("change", cb);
-}
-
-function usePrefersDark() {
-  return useSyncExternalStore(
-    subscribeDark,
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
-    () => false,
-  );
-}
-
 const isLinear = (el: ExcalidrawElement): el is ExcalidrawLinearElement =>
   el.type === "line" || el.type === "arrow";
 
@@ -124,33 +110,36 @@ function SmartShapesToggle({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <label
-      className="flex h-9 cursor-pointer select-none items-center gap-2 rounded-lg px-2 text-xs text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      aria-label="Smart shapes"
+      onClick={() => onChange(!enabled)}
       title="Turn freehand boxes, diamonds, database cylinders, lines and arrows into clean shapes"
+      className={`press flex h-9 select-none items-center gap-2 whitespace-nowrap rounded-full pl-3 pr-2 text-[12.5px] max-sm:pl-2 font-medium shadow-float ${
+        enabled ? "bg-panel text-fg" : "bg-panel text-fg-2"
+      } hover:text-fg`}
     >
-      <span className="whitespace-nowrap">Smart shapes</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={enabled}
-        aria-label="Smart shapes"
-        onClick={() => onChange(!enabled)}
-        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
-          enabled ? "bg-indigo-500" : "bg-neutral-300 dark:bg-neutral-600"
+      <span className="max-sm:hidden">Smart shapes</span>
+      <span
+        aria-hidden
+        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-150 ${
+          enabled ? "bg-accent" : "bg-line"
         }`}
       >
         <span
-          className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${
+          className={`inline-block size-3 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out-quint ${
             enabled ? "translate-x-3.5" : "translate-x-0.5"
           }`}
         />
-      </button>
-    </label>
+      </span>
+    </button>
   );
 }
 
 export function Scratchpad({ slug }: { slug: string }) {
-  const dark = usePrefersDark();
+  const { theme } = useTheme();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSave = useRef<(() => void) | null>(null);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
@@ -360,14 +349,14 @@ export function Scratchpad({ slug }: { slug: string }) {
   );
 
   return (
-    <div className="h-full w-full">
+    <div className="napkin-canvas h-full w-full">
       <Excalidraw
         excalidrawAPI={handleApi}
         initialData={initialData}
         onChange={handleChange}
         onPointerUp={handlePointerUp}
         renderTopRightUI={renderTopRightUI}
-        theme={dark ? "dark" : "light"}
+        theme={theme}
       />
     </div>
   );

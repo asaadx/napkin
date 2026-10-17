@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { PromptPanel } from "@/components/PromptPanel";
-import { Scratchpad } from "@/components/Scratchpad";
-import { TopBar } from "@/components/TopBar";
-import { VoicePanel } from "@/components/VoicePanel";
+import { Suspense } from "react";
+import { toPromptSummaries } from "@/components/problems/summaries";
+import { Workspace, WorkspaceSkeleton } from "@/components/workspace/Workspace";
+import { GradingProvider } from "@/lib/grading";
 import { getAllPrompts, getPrompt } from "@/lib/prompts";
 
 export function generateStaticParams() {
@@ -18,23 +18,37 @@ export async function generateMetadata({
   return { title: prompt ? `${prompt.title} · Napkin` : "Not found · Napkin" };
 }
 
-export default async function PracticePage({ params }: PageProps<"/practice/[slug]">) {
+/**
+ * The page itself stays URL-independent so it can be part of the shared App
+ * Shell; the `params` read happens inside <Suspense> (Cache Components +
+ * partial prefetching otherwise flag "URL data outside of Suspense").
+ */
+export default function PracticePage({ params }: PageProps<"/practice/[slug]">) {
+  return (
+    <Suspense fallback={<WorkspaceSkeleton />}>
+      <PracticeWorkspace params={params} />
+    </Suspense>
+  );
+}
+
+async function PracticeWorkspace({ params }: Pick<PageProps<"/practice/[slug]">, "params">) {
   const { slug } = await params;
   const prompt = getPrompt(slug);
   if (!prompt) notFound();
+  const prompts = toPromptSummaries(getAllPrompts());
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
-      <TopBar title={prompt.title} />
-      <div className="flex min-h-0 flex-1">
-        <PromptPanel prompt={prompt} />
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1">
-            <Scratchpad key={prompt.slug} slug={prompt.slug} />
-          </div>
-          <VoicePanel key={prompt.slug} slug={prompt.slug} />
-        </main>
-      </div>
-    </div>
+    <GradingProvider
+      key={slug}
+      slug={slug}
+      prompt={{
+        title: prompt.title,
+        functional: prompt.functional,
+        nonFunctional: prompt.nonFunctional,
+        scale: prompt.scale,
+      }}
+    >
+      <Workspace prompt={prompt} prompts={prompts} />
+    </GradingProvider>
   );
 }

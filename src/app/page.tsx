@@ -1,27 +1,20 @@
-import { PromptCard } from "@/components/PromptCard";
+import { SiteFooter } from "@/components/nav/SiteFooter";
+import { SiteNav } from "@/components/nav/SiteNav";
+import { ProblemList } from "@/components/problems/ProblemList";
+import { toPromptSummaries } from "@/components/problems/summaries";
 import { getAllPrompts } from "@/lib/prompts";
 
 export default function Home() {
-  const prompts = getAllPrompts();
+  const prompts = toPromptSummaries(getAllPrompts());
   return (
-    <main className="mx-auto w-full max-w-3xl px-6 py-16">
-      <header className="mb-10">
-        <h1 className="text-4xl font-semibold tracking-tight">napkin</h1>
-        <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-          Practice system design interviews. Pick a prompt, sketch it out, talk it through.
-        </p>
-      </header>
-      {prompts.length === 0 ? (
-        <p className="text-sm text-neutral-500">No prompts yet. Add one to the prompts/ directory.</p>
-      ) : (
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {prompts.map((p) => (
-            <li key={p.slug} className="contents">
-              <PromptCard prompt={p} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </main>
+    <>
+      <SiteNav />
+      <main className="flex-1">
+        <div className="mx-auto w-full max-w-[1100px] px-4 pt-8 pb-16 sm:px-6 sm:pt-10">
+          <ProblemList prompts={prompts} variant="page" />
+        </div>
+      </main>
+      <SiteFooter />
+    </>
   );
 }
