@@ -129,7 +129,7 @@ export function TopBar({
 }) {
   const paletteHint = usePaletteHint();
   return (
-    <header className="grid h-[54px] shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-line bg-panel px-[18px] max-sm:grid-cols-[auto_1fr_auto] max-sm:px-3">
+    <header className="flex h-[54px] shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-[18px] max-sm:px-3">
       <div className="flex min-w-0 items-center gap-1">
         <Wordmark />
         <span className="mx-1.5 h-4 w-px bg-line max-sm:hidden" aria-hidden />
@@ -174,7 +174,21 @@ export function TopBar({
         </button>
       </div>
 
-      <div className="flex items-center justify-center">
+      <div className="flex shrink-0 items-center justify-end gap-1.5">
+        <button
+          type="button"
+          onClick={onPalette}
+          aria-label={`Search problems (${paletteHint})`}
+          title="Search problems"
+          className="press inline-flex h-8 items-center gap-2 rounded-lg px-2 text-fg-3 hover:bg-hover hover:text-fg max-md:hidden"
+        >
+          <Search size={15} />
+          <kbd className="rounded-[5px] px-[5px] font-mono text-[11px] leading-[18px] shadow-[inset_0_0_0_1px_var(--color-line)]">
+            {paletteHint}
+          </kbd>
+        </button>
+        <Timer />
+        <ThemeToggle />
         <button
           type="button"
           onClick={onSubmit}
@@ -191,23 +205,6 @@ export function TopBar({
           )}
           <span>{grading ? "Grading…" : "Submit"}</span>
         </button>
-      </div>
-
-      <div className="flex min-w-0 items-center justify-end gap-1.5">
-        <button
-          type="button"
-          onClick={onPalette}
-          aria-label={`Search problems (${paletteHint})`}
-          title="Search problems"
-          className="press inline-flex h-8 items-center gap-2 rounded-lg px-2 text-fg-3 hover:bg-hover hover:text-fg max-md:hidden"
-        >
-          <Search size={15} />
-          <kbd className="rounded-[5px] px-[5px] font-mono text-[11px] leading-[18px] shadow-[inset_0_0_0_1px_var(--color-line)]">
-            {paletteHint}
-          </kbd>
-        </button>
-        <Timer />
-        <ThemeToggle />
       </div>
     </header>
   );
