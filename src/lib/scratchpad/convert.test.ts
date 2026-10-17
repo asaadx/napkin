@@ -3,8 +3,9 @@ import {
   elementPointsToScene,
   findArrowheadTarget,
   linearEndpoints,
+  cylinderBodyPoints,
   normalizeAngle,
-  shapeToSkeleton,
+  shapeToSkeletons,
 } from "./convert";
 
 const style = { strokeColor: "#1e1e1e", strokeWidth: 2, opacity: 80 };
@@ -75,41 +76,64 @@ describe("linearEndpoints", () => {
   });
 });
 
-describe("shapeToSkeleton", () => {
-  it("converts a centre-based rectangle to top-left + angle", () => {
-    const s = shapeToSkeleton(
-      { kind: "rectangle", cx: 100, cy: 60, width: 80, height: 40, angle: 0.3 },
-      style,
-    );
-    expect(s).toMatchObject({
+describe("shapeToSkeletons", () => {
+  it("converts a centre-based rectangle to an axis-aligned top-left box", () => {
+    const s = shapeToSkeletons({ kind: "rectangle", cx: 100, cy: 60, width: 80, height: 40 }, style);
+    expect(s).toHaveLength(1);
+    expect(s[0]).toMatchObject({
       type: "rectangle",
       x: 60,
       y: 40,
       width: 80,
       height: 40,
-      angle: 0.3,
+      angle: 0,
       roughness: 1,
       strokeColor: "#1e1e1e",
       strokeWidth: 2,
       opacity: 80,
       backgroundColor: "transparent",
     });
+    expect(s[0].groupIds).toBeUndefined();
   });
 
-  it("normalizes negative angles and sizes for ellipses", () => {
-    const s = shapeToSkeleton(
-      { kind: "ellipse", cx: 0, cy: 0, width: -20, height: 10, angle: -Math.PI / 2 },
-      style,
-    );
-    expect(s.type).toBe("ellipse");
-    expect(s.width).toBe(20);
-    expect(s.x).toBe(-10);
-    expect(s.y).toBe(-5);
-    expect(s.angle).toBeCloseTo((3 * Math.PI) / 2, 9);
+  it("converts a diamond to an Excalidraw diamond with its bounding box", () => {
+    const [d] = shapeToSkeletons({ kind: "diamond", cx: 0, cy: 0, width: -120, height: 80 }, style);
+    expect(d).toMatchObject({ type: "diamond", x: -60, y: -40, width: 120, height: 80, angle: 0 });
+  });
+
+  it("converts a cylinder to a grouped ellipse (top) and line (sides + bottom arc)", () => {
+    const cyl = { kind: "cylinder", cx: 200, cy: 150, width: 160, height: 200, capHeight: 40 } as const;
+    const parts = shapeToSkeletons(cyl, style, { groupId: "g1" });
+    expect(parts.map((p) => p.type)).toEqual(["ellipse", "line"]);
+    const [top, body] = parts;
+    expect(top).toMatchObject({ x: 120, y: 50, width: 160, height: 40, angle: 0, groupIds: ["g1"], roughness: 1, strokeColor: "#1e1e1e" });
+    expect(body).toMatchObject({ x: 120, y: 70, angle: 0, groupIds: ["g1"], roughness: 1, startArrowhead: null, endArrowhead: null });
+    if (body.type !== "line") throw new Error("expected line");
+    // Starts at the top of the left side, ends at the top of the right side, and reaches the bottom.
+    expect(body.points[0]).toEqual([0, 0]);
+    expect(body.points[body.points.length - 1]).toEqual([160, 0]);
+    const ys = body.points.map(([, y]) => y);
+    const xs = body.points.map(([x]) => x);
+    expect(Math.max(...ys)).toBeCloseTo(180, 6); // 200 total - half the cap
+    expect(body.height).toBeCloseTo(180, 6);
+    expect(body.width).toBe(160);
+    expect(Math.min(...xs)).toBe(0);
+    expect(Math.max(...xs)).toBe(160);
+    // In scene space the body spans exactly the cylinder's box.
+    expect(body.y + Math.max(...ys)).toBeCloseTo(cyl.cy + cyl.height / 2, 6);
+  });
+
+  it("gives each cylinder its own group id by default", () => {
+    const cyl = { kind: "cylinder", cx: 0, cy: 0, width: 100, height: 120, capHeight: 30 } as const;
+    const a = shapeToSkeletons(cyl, style);
+    const b = shapeToSkeletons(cyl, style);
+    expect(a[0].groupIds).toHaveLength(1);
+    expect(a[0].groupIds).toEqual(a[1].groupIds);
+    expect(a[0].groupIds).not.toEqual(b[0].groupIds);
   });
 
   it("converts a line to an origin and relative points", () => {
-    const s = shapeToSkeleton(
+    const [s] = shapeToSkeletons(
       { kind: "line", start: { x: 10, y: 20 }, end: { x: -30, y: 50 } },
       style,
     );
@@ -129,11 +153,36 @@ describe("shapeToSkeleton", () => {
   });
 
   it("gives an arrow its head at the end", () => {
-    const s = shapeToSkeleton(
+    const [s] = shapeToSkeletons(
       { kind: "arrow", start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
       style,
     );
     expect(s).toMatchObject({ type: "arrow", startArrowhead: null, endArrowhead: "arrow" });
+  });
+});
+
+describe("cylinderBodyPoints", () => {
+  it("traces straight sides joined by the lower half of the cap ellipse", () => {
+    const pts = cylinderBodyPoints(100, 150, 30);
+    const side = 150 - 30; // side length between the cap's centre line and the bottom ellipse's
+    for (const [x, y] of pts) {
+      if (y <= side) {
+        // On a side: x is exactly 0 or the full width.
+        expect(x === 0 || x === 100).toBe(true);
+      } else {
+        // On the bottom arc: on the ellipse centred (50, side) with radii (50, 15).
+        expect(((x - 50) / 50) ** 2 + ((y - side) / 15) ** 2).toBeCloseTo(1, 6);
+      }
+    }
+    // Left side is drawn top to bottom, right side bottom to top.
+    const firstArc = pts.findIndex(([, y]) => y > side);
+    expect(pts.slice(0, firstArc).every(([x]) => x === 0)).toBe(true);
+    expect(pts[pts.length - 1]).toEqual([100, 0]);
+  });
+
+  it("degrades to a bare arc when the cylinder is no taller than its cap", () => {
+    const pts = cylinderBodyPoints(100, 20, 40);
+    expect(Math.max(...pts.map(([, y]) => y))).toBeCloseTo(10, 6);
   });
 });
 

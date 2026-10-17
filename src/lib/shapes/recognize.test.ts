@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectArrowhead, recognizeShape, type Point, type RecognizedShape } from "./index";
+import { detectArrowhead, detectCylinder, recognizeShape, type Point, type RecognizedShape } from "./index";
 
 // ---------------------------------------------------------------------------
 // Synthetic stroke generator
@@ -130,37 +130,86 @@ function arrowIdeal(start: Point, end: Point, style: "hook" | "both" | "cross", 
   return [start, end, b(1), b(-1)];
 }
 
+/** Rhombus with its vertices at the midpoints of a w×h box, starting at vertex `start` (0 = top). */
+function diamondIdeal({ cx, cy, w, h, start = 0, clockwise = true, overshoot = 0 }: {
+  cx: number; cy: number; w: number; h: number; start?: number; clockwise?: boolean; overshoot?: number;
+}): Point[] {
+  let v: Point[] = [
+    { x: cx, y: cy - h / 2 },
+    { x: cx + w / 2, y: cy },
+    { x: cx, y: cy + h / 2 },
+    { x: cx - w / 2, y: cy },
+  ];
+  if (!clockwise) v = [v[0], v[3], v[2], v[1]];
+  v = [...v.slice(start % 4), ...v.slice(0, start % 4)];
+  const pts = [...v, v[0]];
+  if (overshoot > 0) pts.push({ x: v[0].x + (v[1].x - v[0].x) * overshoot, y: v[0].y + (v[1].y - v[0].y) * overshoot });
+  return pts;
+}
+
+type CylOpts = { cx: number; top: number; w: number; capH: number; bodyH: number };
+
+/** Top ellipse of a cylinder, drawn as one loop. */
+function capIdeal({ cx, top, w, capH }: CylOpts, start = 2.6, clockwise = true, sweep = 1.04): Point[] {
+  return ellipseIdeal({ cx, cy: top + capH / 2, rx: w / 2, ry: capH / 2, start, clockwise, sweep });
+}
+
+/**
+ * The "U" of a cylinder: down the left side, along the bottom arc, up the right.
+ * `ends` nudges the left/right endpoints (sloppy starts and finishes).
+ */
+function bodyIdeal({ cx, top, w, capH, bodyH }: CylOpts, ends: [Point, Point] = [{ x: 0, y: 0 }, { x: 0, y: 0 }]): Point[] {
+  const cy = top + capH / 2, rx = w / 2, ry = capH / 2;
+  const bottomC = cy + bodyH;
+  return [
+    { x: cx - rx + ends[0].x, y: cy + ends[0].y },
+    ...curve((t) => ({ x: cx - rx * Math.cos(t * Math.PI), y: bottomC + ry * Math.sin(t * Math.PI) }), 60),
+    { x: cx + rx + ends[1].x, y: cy + ends[1].y },
+  ];
+}
+
+/** One-stroke "can" outline: top arc, right side, bottom arc, left side. */
+function canIdeal({ cx, top, w, capH, bodyH }: CylOpts): Point[] {
+  const cy = top + capH / 2, rx = w / 2, ry = capH / 2;
+  return [
+    ...curve((t) => ({ x: cx - rx * Math.cos(t * Math.PI), y: cy - ry * Math.sin(t * Math.PI) }), 60),
+    ...curve((t) => ({ x: cx + rx * Math.cos(t * Math.PI), y: cy + bodyH + ry * Math.sin(t * Math.PI) }), 60),
+    { x: cx - rx, y: cy },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Assertions
 // ---------------------------------------------------------------------------
 
 function expectBox(
   s: RecognizedShape | null,
-  kind: "rectangle" | "ellipse",
-  want: { cx: number; cy: number; width: number; height: number; angle?: number },
+  kind: "rectangle" | "diamond",
+  want: { cx: number; cy: number; width: number; height: number },
+  tol = 0.1,
 ) {
   expect(s, `expected ${kind}`).not.toBeNull();
   expect(s!.kind).toBe(kind);
-  const b = s as Extract<RecognizedShape, { kind: "rectangle" | "ellipse" }>;
+  const b = s as Extract<RecognizedShape, { kind: "rectangle" | "diamond" }>;
   const scale = Math.max(want.width, want.height);
-  expect(Math.abs(b.cx - want.cx)).toBeLessThan(0.1 * scale);
-  expect(Math.abs(b.cy - want.cy)).toBeLessThan(0.1 * scale);
-  // Width/height may come back swapped together with a 90° rotation; compare as a set.
-  const got = [b.width, b.height].sort((x, y) => x - y);
-  const exp = [want.width, want.height].sort((x, y) => x - y);
-  expect(Math.abs(got[0] - exp[0]) / exp[0]).toBeLessThan(0.1);
-  expect(Math.abs(got[1] - exp[1]) / exp[1]).toBeLessThan(0.1);
-  if (want.angle !== undefined) {
-    if (want.angle === 0) {
-      expect(b.angle).toBe(0);
-      expect(Math.abs(b.width - want.width) / want.width).toBeLessThan(0.1);
-    } else {
-      const period = kind === "rectangle" ? Math.PI / 2 : Math.PI;
-      let d = Math.abs(b.angle - want.angle) % period;
-      d = Math.min(d, period - d);
-      expect(d).toBeLessThan(5 * (Math.PI / 180));
-    }
-  }
+  expect(Math.abs(b.cx - want.cx)).toBeLessThan(tol * scale);
+  expect(Math.abs(b.cy - want.cy)).toBeLessThan(tol * scale);
+  // Always axis-aligned, so width is the horizontal extent.
+  expect(Math.abs(b.width - want.width) / want.width).toBeLessThan(tol);
+  expect(Math.abs(b.height - want.height) / want.height).toBeLessThan(tol);
+  expect("angle" in b).toBe(false);
+}
+
+function expectCylinder(s: RecognizedShape | null, o: CylOpts, tol = 0.12, capTol = 0.35) {
+  expect(s, "expected cylinder").not.toBeNull();
+  expect(s!.kind).toBe("cylinder");
+  const c = s as Extract<RecognizedShape, { kind: "cylinder" }>;
+  const height = o.capH + o.bodyH;
+  expect(Math.abs(c.cx - o.cx)).toBeLessThan(tol * o.w);
+  expect(Math.abs(c.cy - (o.top + height / 2))).toBeLessThan(tol * height);
+  expect(Math.abs(c.width - o.w) / o.w).toBeLessThan(tol);
+  expect(Math.abs(c.height - height) / height).toBeLessThan(tol);
+  expect(Math.abs(c.capHeight - o.capH)).toBeLessThan(capTol * o.capH);
 }
 
 function expectSegment(s: RecognizedShape | null, kind: "line" | "arrow", start: Point, end: Point, tol = 0.08) {
@@ -179,93 +228,305 @@ const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
 // ---------------------------------------------------------------------------
 
 describe("recognizeShape: rectangles", () => {
-  it("wobbly square → square (all start corners, both directions)", () => {
+  it("wobbly square keeps its drawn aspect (all start corners, both directions)", () => {
     for (const seed of SEEDS) {
       const pts = handDraw(
-        rectIdeal({ cx: 300, cy: 200, w: 160, h: 152, startCorner: (seed % 4) as 0 | 1 | 2 | 3, clockwise: seed % 2 === 0 }),
+        rectIdeal({ cx: 300, cy: 200, w: 160, h: 144, startCorner: (seed % 4) as 0 | 1 | 2 | 3, clockwise: seed % 2 === 0 }),
         { seed, wobble: 3, jitter: 1.5 },
       );
       const s = recognizeShape(pts);
-      expectBox(s, "rectangle", { cx: 300, cy: 200, width: 156, height: 156, angle: 0 });
+      expectBox(s, "rectangle", { cx: 300, cy: 200, width: 160, height: 144 }, 0.06);
       const r = s as Extract<RecognizedShape, { kind: "rectangle" }>;
-      expect(r.width).toBe(r.height); // snapped to a square
+      expect(r.width).toBeGreaterThan(r.height); // no square snapping
     }
   });
 
   it("wide rectangle", () => {
     for (const seed of SEEDS) {
       const pts = handDraw(rectIdeal({ cx: 500, cy: 120, w: 320, h: 90, startCorner: (seed % 4) as 0 | 1 | 2 | 3, clockwise: seed % 2 === 1 }), { seed });
-      expectBox(recognizeShape(pts), "rectangle", { cx: 500, cy: 120, width: 320, height: 90, angle: 0 });
+      expectBox(recognizeShape(pts), "rectangle", { cx: 500, cy: 120, width: 320, height: 90 });
     }
   });
 
-  it("tall rectangle keeps width/height orientation at angle 0", () => {
+  it("tall rectangle keeps width/height orientation", () => {
     const pts = handDraw(rectIdeal({ cx: 0, cy: 0, w: 80, h: 240 }), { seed: 9 });
-    expectBox(recognizeShape(pts), "rectangle", { cx: 0, cy: 0, width: 80, height: 240, angle: 0 });
+    expectBox(recognizeShape(pts), "rectangle", { cx: 0, cy: 0, width: 80, height: 240 });
   });
 
-  it("slightly tilted (6°) rectangle snaps to axis-aligned", () => {
-    const pts = handDraw(rectIdeal({ cx: 200, cy: 200, w: 220, h: 120, angle: 6 * (Math.PI / 180) }), { seed: 3 });
-    expectBox(recognizeShape(pts), "rectangle", { cx: 200, cy: 200, width: 220, height: 120, angle: 0 });
-  });
-
-  it("rectangle rotated ~30°", () => {
+  it("boxes tilted ~10° (either way) become axis-aligned rectangles", () => {
     for (const seed of SEEDS) {
-      const angle = 30 * (Math.PI / 180);
-      const pts = handDraw(rectIdeal({ cx: 400, cy: 300, w: 240, h: 130, angle, startCorner: (seed % 4) as 0 | 1 | 2 | 3, clockwise: seed % 2 === 0 }), { seed });
-      expectBox(recognizeShape(pts), "rectangle", { cx: 400, cy: 300, width: 240, height: 130, angle });
+      const angle = (seed % 2 ? 1 : -1) * (8 + (seed % 4)) * (Math.PI / 180);
+      const pts = handDraw(rectIdeal({ cx: 200, cy: 200, w: 220, h: 120, angle, startCorner: (seed % 4) as 0 | 1 | 2 | 3 }), { seed });
+      expectBox(recognizeShape(pts), "rectangle", { cx: 200, cy: 200, width: 220, height: 120 });
     }
+  });
+
+  it("boxes tilted up to ~22° still straighten, keeping their side lengths", () => {
+    for (const seed of SEEDS) {
+      const angle = (seed % 2 ? 1 : -1) * (16 + (seed % 3) * 3) * (Math.PI / 180);
+      const pts = handDraw(rectIdeal({ cx: 400, cy: 300, w: 240, h: 130, angle, clockwise: seed % 3 === 0 }), { seed });
+      expectBox(recognizeShape(pts), "rectangle", { cx: 400, cy: 300, width: 240, height: 130 });
+    }
+  });
+
+  it("a tilted tall box straightens without swapping width and height", () => {
+    const pts = handDraw(rectIdeal({ cx: 0, cy: 0, w: 90, h: 200, angle: 12 * (Math.PI / 180) }), { seed: 4 });
+    expectBox(recognizeShape(pts), "rectangle", { cx: 0, cy: 0, width: 90, height: 200 });
   });
 
   it("box with overshoot at the close", () => {
     for (const seed of SEEDS) {
       const pts = handDraw(rectIdeal({ cx: 250, cy: 250, w: 200, h: 140, overshoot: 0.25, startCorner: (seed % 4) as 0 | 1 | 2 | 3 }), { seed });
-      expectBox(recognizeShape(pts), "rectangle", { cx: 250, cy: 250, width: 200, height: 140, angle: 0 });
+      expectBox(recognizeShape(pts), "rectangle", { cx: 250, cy: 250, width: 200, height: 140 });
     }
   });
 
   it("box with a small undershoot gap at the close", () => {
     for (const seed of SEEDS) {
       const pts = handDraw(rectIdeal({ cx: 250, cy: 250, w: 200, h: 140, overshoot: -0.15 }), { seed });
-      expectBox(recognizeShape(pts), "rectangle", { cx: 250, cy: 250, width: 200, height: 140, angle: 0 });
+      expectBox(recognizeShape(pts), "rectangle", { cx: 250, cy: 250, width: 200, height: 140 });
+    }
+  });
+
+  it("randomized boxes (size, aspect, tilt ≤ 15°, start, direction, noise)", () => {
+    const rand = rng(1234);
+    for (let i = 0; i < 60; i++) {
+      const w = 70 + rand() * 300, h = Math.max(50, w * (0.3 + rand() * 1.4));
+      const angle = (rand() * 2 - 1) * 15 * (Math.PI / 180);
+      const pts = handDraw(
+        rectIdeal({ cx: 0, cy: 0, w, h, angle, startCorner: Math.floor(rand() * 4) as 0 | 1 | 2 | 3, clockwise: rand() < 0.5, overshoot: rand() * 0.2 }),
+        { seed: 100 + i, wobble: 1 + rand() * 2.5, jitter: 0.5 + rand() },
+      );
+      const s = recognizeShape(pts);
+      expect(s?.kind, `box #${i}`).toBe("rectangle");
     }
   });
 });
 
-describe("recognizeShape: ellipses", () => {
-  it("circle → circle (various start angles, both directions)", () => {
+describe("recognizeShape: diamonds", () => {
+  it("diamonds of several sizes and aspects, every start vertex and direction", () => {
+    const sizes: [number, number][] = [[120, 120], [200, 140], [260, 120], [90, 130], [400, 260]];
+    for (const [w, h] of sizes) {
+      for (const seed of SEEDS) {
+        const pts = handDraw(diamondIdeal({ cx: 300, cy: 200, w, h, start: seed, clockwise: seed % 2 === 0 }), { seed });
+        expectBox(recognizeShape(pts), "diamond", { cx: 300, cy: 200, width: w, height: h });
+      }
+    }
+  });
+
+  it("wobbly diamonds, with overshoot at the close", () => {
     for (const seed of SEEDS) {
-      const pts = handDraw(ellipseIdeal({ cx: 300, cy: 300, rx: 90, ry: 86, start: seed, clockwise: seed % 2 === 0, sweep: 1.02 }), { seed });
+      const pts = handDraw(diamondIdeal({ cx: 0, cy: 0, w: 220, h: 160, start: seed, overshoot: 0.2 }), { seed, wobble: 3.5, jitter: 1.5 });
+      expectBox(recognizeShape(pts), "diamond", { cx: 0, cy: 0, width: 220, height: 160 });
+    }
+  });
+
+  it("a square rotated 40–45° is a diamond", () => {
+    for (const seed of SEEDS) {
+      const angle = (40 + (seed % 6)) * (Math.PI / 180);
+      const pts = handDraw(rectIdeal({ cx: 0, cy: 0, w: 140, h: 140, angle, startCorner: (seed % 4) as 0 | 1 | 2 | 3 }), { seed });
+      expect(recognizeShape(pts)?.kind, `seed ${seed}`).toBe("diamond");
+    }
+  });
+
+  it("randomized diamonds", () => {
+    const rand = rng(77);
+    for (let i = 0; i < 60; i++) {
+      const w = 80 + rand() * 280, h = w * (0.45 + rand() * 1.0);
+      const pts = handDraw(
+        diamondIdeal({ cx: 0, cy: 0, w, h, start: Math.floor(rand() * 4), clockwise: rand() < 0.5, overshoot: rand() * 0.15 }),
+        { seed: 300 + i, wobble: 1 + rand() * 2.5, jitter: 0.5 + rand() },
+      );
+      expect(recognizeShape(pts)?.kind, `diamond #${i}`).toBe("diamond");
+    }
+  });
+});
+
+describe("recognizeShape: ambiguous quads", () => {
+  it("a box tilted ~30° is neither rectangle nor diamond", () => {
+    for (const seed of SEEDS) {
+      for (const [w, h] of [[160, 160], [240, 130]] as const) {
+        const angle = (seed % 2 ? 1 : -1) * (28 + (seed % 5)) * (Math.PI / 180);
+        const pts = handDraw(rectIdeal({ cx: 0, cy: 0, w, h, angle, startCorner: (seed % 4) as 0 | 1 | 2 | 3 }), { seed });
+        const s = recognizeShape(pts);
+        expect(s, `${w}x${h} seed ${seed} → ${JSON.stringify(s)}`).toBeNull();
+      }
+    }
+  });
+
+  it("randomized quads tilted 27–33° → null", () => {
+    const rand = rng(99);
+    for (let i = 0; i < 60; i++) {
+      const w = 80 + rand() * 250, h = w * (0.5 + rand());
+      const angle = (rand() < 0.5 ? 1 : -1) * (27 + rand() * 6) * (Math.PI / 180);
+      const pts = handDraw(rectIdeal({ cx: 0, cy: 0, w, h, angle, startCorner: Math.floor(rand() * 4) as 0 | 1 | 2 | 3, clockwise: rand() < 0.5 }), { seed: 1500 + i, wobble: 1 + rand() * 2 });
       const s = recognizeShape(pts);
-      expectBox(s, "ellipse", { cx: 300, cy: 300, width: 176, height: 176, angle: 0 });
-      const e = s as Extract<RecognizedShape, { kind: "ellipse" }>;
-      expect(e.width).toBe(e.height);
+      expect(s, `#${i} ${JSON.stringify(s)}`).toBeNull();
     }
   });
 
-  it("flat ellipse", () => {
+  it("a non-square rectangle rotated 45° is not a diamond (corners off the midpoints)", () => {
     for (const seed of SEEDS) {
-      const pts = handDraw(ellipseIdeal({ cx: 200, cy: 100, rx: 150, ry: 50, start: seed * 0.8, clockwise: seed % 2 === 1 }), { seed });
-      expectBox(recognizeShape(pts), "ellipse", { cx: 200, cy: 100, width: 300, height: 100, angle: 0 });
+      const pts = handDraw(rectIdeal({ cx: 0, cy: 0, w: 240, h: 110, angle: Math.PI / 4 }), { seed });
+      expect(recognizeShape(pts)).toBeNull();
+    }
+  });
+});
+
+describe("recognizeShape: single-stroke cylinder", () => {
+  const shapes: CylOpts[] = [
+    { cx: 200, top: 100, w: 160, capH: 50, bodyH: 180 },
+    { cx: 0, top: 0, w: 120, capH: 44, bodyH: 120 },
+    { cx: 500, top: 300, w: 200, capH: 70, bodyH: 160 },
+  ];
+  it("can outline → cylinder", () => {
+    for (const o of shapes) {
+      for (const seed of SEEDS) {
+        const ideal = canIdeal(o);
+        const pts = handDraw(seed % 2 ? ideal : reverse(ideal), { seed });
+        expectCylinder(recognizeShape(pts), o, 0.12, 0.5);
+      }
     }
   });
 
-  it("rotated ellipse keeps its rotation", () => {
-    const angle = 40 * (Math.PI / 180);
-    const pts = handDraw(ellipseIdeal({ cx: 0, cy: 0, rx: 140, ry: 60, angle }), { seed: 4 });
-    expectBox(recognizeShape(pts), "ellipse", { cx: 0, cy: 0, width: 280, height: 120, angle });
+  it("randomized cans: mostly cylinders, never a diamond", () => {
+    const rand = rng(555);
+    let hits = 0;
+    const total = 80;
+    for (let i = 0; i < total; i++) {
+      const w = 90 + rand() * 200;
+      const o = { cx: 0, top: 0, w, capH: w * (0.25 + rand() * 0.25), bodyH: w * (0.7 + rand() * 1.2) };
+      const ideal = canIdeal(o);
+      const s = recognizeShape(handDraw(rand() < 0.5 ? ideal : reverse(ideal), { seed: 900 + i, wobble: 1 + rand() * 2, jitter: 0.5 + rand() }));
+      // A can with shallow caps is close to a rounded box; reading it as a
+      // rectangle is tolerable, anything else is not.
+      expect(s === null || s.kind === "cylinder" || s.kind === "rectangle", JSON.stringify(s)).toBe(true);
+      if (s?.kind === "cylinder") hits++;
+    }
+    expect(hits / total).toBeGreaterThan(0.8);
+  });
+});
+
+describe("detectCylinder: two strokes", () => {
+  const shapes: CylOpts[] = [
+    { cx: 200, top: 100, w: 160, capH: 50, bodyH: 180 },
+    { cx: 0, top: 0, w: 110, capH: 36, bodyH: 90 },
+    { cx: 600, top: 300, w: 240, capH: 80, bodyH: 200 },
+    { cx: 300, top: 50, w: 180, capH: 60, bodyH: 300 },
+  ];
+
+  it("loop then U, and U then loop", () => {
+    for (const o of shapes) {
+      for (const seed of SEEDS) {
+        const cap = handDraw(capIdeal(o, seed, seed % 2 === 0), { seed, wobble: 1.5 });
+        const body = handDraw(seed % 3 ? bodyIdeal(o) : reverse(bodyIdeal(o)), { seed: seed + 50 });
+        expectCylinder(detectCylinder(cap, body), o);
+        expectCylinder(detectCylinder(body, cap), o);
+      }
+    }
   });
 
-  it("lopsided circle", () => {
+  it("sloppy endpoints: starting high or low, inside or outside the loop's extremes", () => {
+    const o = shapes[0];
+    const rand = rng(9);
+    for (let i = 0; i < 40; i++) {
+      const j = () => ({ x: (rand() * 2 - 1) * 0.15 * o.w, y: (rand() * 2 - 1) * (o.capH / 2 + 0.08 * o.w) });
+      const cap = handDraw(capIdeal(o, rand() * 6, rand() < 0.5), { seed: i, wobble: 1.5 });
+      const body = handDraw(bodyIdeal(o, [j(), j()]), { seed: i + 500 });
+      expectCylinder(detectCylinder(cap, body), o, 0.2);
+    }
+  });
+
+  it("randomized two-stroke cylinders", () => {
+    const rand = rng(2024);
+    let hits = 0;
+    const total = 80;
+    for (let i = 0; i < total; i++) {
+      const w = 70 + rand() * 250;
+      const o = { cx: rand() * 500, top: rand() * 500, w, capH: w * (0.2 + rand() * 0.35), bodyH: w * (0.5 + rand() * 1.5) };
+      const j = () => ({ x: (rand() * 2 - 1) * 0.1 * w, y: (rand() * 2 - 1) * 0.5 * o.capH });
+      const cap = handDraw(capIdeal(o, rand() * 6, rand() < 0.5, 1 + rand() * 0.08), { seed: 2000 + i, wobble: 0.8 + rand() * 1.5, jitter: 0.5 + rand() });
+      const bodyPts = bodyIdeal(o, [j(), j()]);
+      const body = handDraw(rand() < 0.5 ? bodyPts : reverse(bodyPts), { seed: 3000 + i, wobble: 1 + rand() * 2, jitter: 0.5 + rand() });
+      const s = rand() < 0.5 ? detectCylinder(cap, body) : detectCylinder(body, cap);
+      if (s) {
+        expectCylinder(s, o, 0.2);
+        hits++;
+      }
+    }
+    expect(hits / total).toBeGreaterThan(0.9);
+  });
+
+  it("a loop paired with other strokes (text, arrows, boxes, arcs) is not a cylinder", () => {
+    const o = { cx: 200, top: 100, w: 160, capH: 50, bodyH: 180 };
+    const cy = o.top + o.capH / 2, l = o.cx - o.w / 2, r = o.cx + o.w / 2;
+    const others: [string, Point[]][] = [
+      ["arrow down", arrowIdeal({ x: o.cx, y: cy + 40 }, { x: o.cx, y: cy + 240 }, "both")],
+      ["line between extremes", [{ x: l, y: cy }, { x: r, y: cy }]],
+      ["box below", rectIdeal({ cx: o.cx, cy: cy + 120, w: o.w, h: 150 })],
+      ["L", [{ x: l, y: cy }, { x: l, y: cy + 200 }, { x: r, y: cy + 200 }]],
+      ["C", ellipseIdeal({ cx: o.cx, cy: cy + 100, rx: 80, ry: 100, start: -Math.PI / 2, sweep: 0.5, clockwise: false })],
+      ["cursive", curve((t) => ({ x: l + o.w * t + 15 * Math.cos(t * 30), y: cy + 100 + 25 * Math.sin(t * 30) }), 300)],
+      ["zigzag down", [{ x: l, y: cy }, { x: r, y: cy + 60 }, { x: l, y: cy + 120 }, { x: r, y: cy + 180 }]],
+      ["square U too shallow", [{ x: l, y: cy }, { x: l, y: cy + 20 }, { x: r, y: cy + 20 }, { x: r, y: cy }]],
+    ];
     for (const seed of SEEDS) {
-      const pts = handDraw(ellipseIdeal({ cx: 100, cy: 100, rx: 80, ry: 80, lopsided: 0.08, start: seed, sweep: 0.97 }), { seed });
-      expectBox(recognizeShape(pts), "ellipse", { cx: 100, cy: 100, width: 160, height: 160 });
+      const cap = handDraw(capIdeal(o, seed), { seed, wobble: 1.5 });
+      for (const [label, ideal] of others) {
+        const s = handDraw(ideal, { seed: seed + 10 });
+        expect(detectCylinder(cap, s), label).toBeNull();
+        expect(detectCylinder(s, cap), `${label} (first)`).toBeNull();
+      }
     }
   });
 
-  it("circle with overshoot", () => {
-    const pts = handDraw(ellipseIdeal({ cx: 0, cy: 0, rx: 100, ry: 100, sweep: 1.12 }), { seed: 11 });
-    expectBox(recognizeShape(pts), "ellipse", { cx: 0, cy: 0, width: 200, height: 200 });
+  it("neither stroke alone is a shape", () => {
+    const o = shapes[0];
+    for (const seed of SEEDS) {
+      expect(recognizeShape(handDraw(capIdeal(o, seed), { seed, wobble: 1.5 }))).toBeNull();
+      expect(recognizeShape(handDraw(bodyIdeal(o), { seed }))).toBeNull();
+    }
+  });
+
+  it("a U far from the loop is not a cylinder", () => {
+    const o = shapes[0];
+    const cap = handDraw(capIdeal(o), { seed: 1, wobble: 1.5 });
+    const elsewhere = (dx: number, dy: number) => bodyIdeal({ ...o, cx: o.cx + dx, top: o.top + dy });
+    for (const [dx, dy] of [[300, 0], [0, 260], [-120, 40], [80, 0], [0, -150], [0, 90]]) {
+      expect(detectCylinder(cap, handDraw(elsewhere(dx, dy), { seed: 2 })), `${dx},${dy}`).toBeNull();
+    }
+  });
+
+  it("a U much narrower or wider than the loop is not a cylinder", () => {
+    const o = shapes[0];
+    const cap = handDraw(capIdeal(o), { seed: 1, wobble: 1.5 });
+    expect(detectCylinder(cap, handDraw(bodyIdeal({ ...o, w: 90 }), { seed: 3 }))).toBeNull();
+    expect(detectCylinder(cap, handDraw(bodyIdeal({ ...o, w: 260 }), { seed: 3 }))).toBeNull();
+  });
+
+  it("a V, a bowl, a line, or a second loop under the loop is not a cylinder", () => {
+    const o = shapes[0];
+    const cap = handDraw(capIdeal(o), { seed: 1, wobble: 1.5 });
+    const cy = o.top + o.capH / 2, l = o.cx - o.w / 2, r = o.cx + o.w / 2;
+    const v = [{ x: l, y: cy }, { x: o.cx, y: cy + 200 }, { x: r, y: cy }];
+    const bowl = curve((t) => ({ x: o.cx - (o.w / 2) * Math.cos(t * Math.PI), y: cy + (o.w / 2) * Math.sin(t * Math.PI) }), 80);
+    for (const seed of SEEDS) {
+      expect(detectCylinder(cap, handDraw(v, { seed })), "V").toBeNull();
+      expect(detectCylinder(cap, handDraw(bowl, { seed })), "bowl").toBeNull();
+      expect(detectCylinder(cap, handDraw([{ x: l, y: cy + 150 }, { x: r, y: cy + 150 }], { seed })), "line").toBeNull();
+      expect(detectCylinder(cap, handDraw(capIdeal({ ...o, top: o.top + 150 }), { seed })), "loop").toBeNull();
+    }
+  });
+
+  it("a round loop or a box on top is not a cylinder cap", () => {
+    const o = shapes[0];
+    const body = handDraw(bodyIdeal(o), { seed: 1 });
+    const circle = handDraw(ellipseIdeal({ cx: o.cx, cy: o.top + o.capH / 2, rx: o.w / 2, ry: o.w / 2 }), { seed: 2 });
+    expect(detectCylinder(circle, body)).toBeNull();
+    const tilted = handDraw(ellipseIdeal({ cx: o.cx, cy: o.top + o.capH / 2, rx: o.w / 2, ry: o.capH / 2, angle: 0.5 }), { seed: 2 });
+    expect(detectCylinder(tilted, body)).toBeNull();
+    // Two U's are not a cylinder either.
+    expect(detectCylinder(body, handDraw(bodyIdeal(o), { seed: 4 }))).toBeNull();
   });
 });
 
@@ -386,6 +647,64 @@ describe("recognizeShape: negatives return null", () => {
     expect(s, `${label} → ${JSON.stringify(s)}`).toBeNull();
   };
 
+  it("circles and loops stay ink", () => {
+    for (const seed of SEEDS) {
+      expectNull(handDraw(ellipseIdeal({ cx: 300, cy: 300, rx: 90, ry: 86, start: seed, clockwise: seed % 2 === 0, sweep: 1.02 }), { seed }), "circle");
+      expectNull(handDraw(ellipseIdeal({ cx: 200, cy: 100, rx: 150, ry: 50, start: seed * 0.8, clockwise: seed % 2 === 1 }), { seed }), "flat ellipse");
+      expectNull(handDraw(ellipseIdeal({ cx: 0, cy: 0, rx: 60, ry: 140, start: seed }), { seed }), "tall ellipse");
+      expectNull(handDraw(ellipseIdeal({ cx: 0, cy: 0, rx: 140, ry: 60, angle: seed * 0.4 }), { seed }), "rotated ellipse");
+      expectNull(handDraw(ellipseIdeal({ cx: 100, cy: 100, rx: 80, ry: 80, lopsided: 0.08, start: seed, sweep: 0.97 }), { seed }), "lopsided circle");
+      expectNull(handDraw(ellipseIdeal({ cx: 0, cy: 0, rx: 100, ry: 100, sweep: 1.12, start: seed }), { seed }), "circle with overshoot");
+    }
+  });
+
+  it("randomized loops never convert", () => {
+    const rand = rng(4242);
+    for (let i = 0; i < 80; i++) {
+      const rx = 30 + rand() * 200, ry = rx * (0.15 + rand() * 2);
+      const pts = handDraw(
+        ellipseIdeal({ cx: 0, cy: 0, rx, ry, angle: rand() * Math.PI, start: rand() * 6, clockwise: rand() < 0.5, sweep: 0.95 + rand() * 0.15, lopsided: rand() * 0.1 }),
+        { seed: 700 + i, wobble: 1 + rand() * 3, jitter: 0.5 + rand() },
+      );
+      expectNull(pts, `loop #${i}`);
+    }
+  });
+
+  it("rounded boxes and pills are not cylinders", () => {
+    const rounded = (w: number, h: number, r: number): Point[] => {
+      const pts: Point[] = [];
+      const corners = [[w / 2 - r, -h / 2 + r, -Math.PI / 2], [w / 2 - r, h / 2 - r, 0], [-w / 2 + r, h / 2 - r, Math.PI / 2], [-w / 2 + r, -h / 2 + r, Math.PI]];
+      for (const [x, y, a0] of corners) pts.push(...curve((t) => ({ x: x + r * Math.cos(a0 + (t * Math.PI) / 2), y: y + r * Math.sin(a0 + (t * Math.PI) / 2) }), 12));
+      pts.push({ ...pts[0] });
+      return pts;
+    };
+    for (const seed of SEEDS) {
+      // Vertical pill: semicircular caps.
+      const pill = [
+        ...curve((t) => ({ x: -60 * Math.cos(t * Math.PI), y: -60 - 60 * Math.sin(t * Math.PI) }), 50),
+        ...curve((t) => ({ x: 60 * Math.cos(t * Math.PI), y: 60 + 60 * Math.sin(t * Math.PI) }), 50),
+        { x: -60, y: -60 },
+      ];
+      for (const [label, ideal] of [["pill", pill], ["rounded box", rounded(160, 220, 30)], ["very rounded box", rounded(160, 220, 40)], ["rounded wide box", rounded(240, 140, 35)]] as const) {
+        const s = recognizeShape(handDraw(ideal, { seed }));
+        expect(s?.kind === "cylinder" || s?.kind === "diamond", `${label}: ${JSON.stringify(s)}`).toBe(false);
+      }
+    }
+  });
+
+  it("randomized rounded boxes are never cylinders", () => {
+    const rand = rng(31337);
+    for (let i = 0; i < 60; i++) {
+      const w = 90 + rand() * 220, h = w * (0.6 + rand() * 1.2), r = Math.min(w, h) * (0.1 + rand() * 0.25);
+      const pts: Point[] = [];
+      const corners = [[w / 2 - r, -h / 2 + r, -Math.PI / 2], [w / 2 - r, h / 2 - r, 0], [-w / 2 + r, h / 2 - r, Math.PI / 2], [-w / 2 + r, -h / 2 + r, Math.PI]];
+      for (const [x, y, a0] of corners) pts.push(...curve((t) => ({ x: x + r * Math.cos(a0 + (t * Math.PI) / 2), y: y + r * Math.sin(a0 + (t * Math.PI) / 2) }), 12));
+      pts.push({ ...pts[0] });
+      const s = recognizeShape(handDraw(pts, { seed: 1100 + i, wobble: 1 + rand() * 2.5, jitter: 0.5 + rand() }));
+      expect(s === null || s.kind === "rectangle", `#${i} ${w.toFixed(0)}x${h.toFixed(0)} r${r.toFixed(0)}: ${JSON.stringify(s)}`).toBe(true);
+    }
+  });
+
   it("handwriting-like squiggles", () => {
     for (const seed of SEEDS) {
       const rand = rng(seed * 31);
@@ -483,7 +802,7 @@ describe("recognizeShape: negatives return null", () => {
     expectNull([], "empty");
   });
 
-  it("triangle is neither rectangle nor ellipse", () => {
+  it("triangle is not a shape", () => {
     for (const seed of SEEDS) {
       const tri = [{ x: 0, y: 150 }, { x: 90, y: 0 }, { x: 180, y: 150 }, { x: 0, y: 150 }];
       const rotated = tri.map((p) => rot(p, { x: 90, y: 90 }, seed * 0.7));

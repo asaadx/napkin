@@ -30,7 +30,7 @@ export type StrokeStyle = {
  */
 export type ShapeSkeleton =
   | ({
-      type: "rectangle" | "ellipse";
+      type: "rectangle" | "diamond" | "ellipse";
       x: number;
       y: number;
       width: number;
@@ -41,6 +41,7 @@ export type ShapeSkeleton =
       fillStyle: "solid";
       strokeStyle: "solid";
       roundness: { type: number } | null;
+      groupIds?: string[];
     } & StrokeStyle)
   | ({
       type: "line" | "arrow";
@@ -57,10 +58,11 @@ export type ShapeSkeleton =
       roundness: { type: number } | null;
       startArrowhead: ArrowheadName | null;
       endArrowhead: ArrowheadName | null;
+      groupIds?: string[];
     } & StrokeStyle);
 
 const TAU = Math.PI * 2;
-/** Excalidraw's ROUNDNESS.ADAPTIVE_RADIUS (rectangles) and PROPORTIONAL_RADIUS (lines). */
+/** Excalidraw's ROUNDNESS.ADAPTIVE_RADIUS (rectangles) and PROPORTIONAL_RADIUS (lines, diamonds). */
 const ROUNDNESS_ADAPTIVE = 3;
 const ROUNDNESS_PROPORTIONAL = 2;
 
@@ -109,12 +111,52 @@ export function linearEndpoints(el: PointsElementLike): { start: Point; end: Poi
   return { start: scene[0], end: scene[scene.length - 1] };
 }
 
+/** Segments used to trace the bottom arc of a cylinder. */
+const CYLINDER_ARC_SEGMENTS = 8;
+
 /**
- * Converts a recognized shape (centre-based, scene coordinates) into Excalidraw
- * element props (top-left of the unrotated box plus angle; linear elements as
- * an origin plus relative points).
+ * The open outline of a cylinder's body, relative to the top of its left
+ * side: down the left side, along the lower half of the bottom ellipse, and
+ * up the right side. Drawn as a curved line, so the points next to each
+ * side/arc junction are spaced like the arc's own points; uneven spacing makes
+ * the curve overshoot into a hook there.
  */
-export function shapeToSkeleton(shape: RecognizedShape, style: StrokeStyle): ShapeSkeleton {
+export function cylinderBodyPoints(width: number, height: number, capHeight: number): [number, number][] {
+  const rx = width / 2;
+  const ry = Math.min(capHeight, height) / 2;
+  const side = Math.max(0, height - 2 * ry);
+  const arc: [number, number][] = [];
+  for (let i = 0; i <= CYLINDER_ARC_SEGMENTS; i++) {
+    const t = Math.PI - (Math.PI * i) / CYLINDER_ARC_SEGMENTS; // left (π) → bottom (π/2) → right (0)
+    arc.push([rx + rx * Math.cos(t), side + ry * Math.sin(t)]);
+  }
+  const chord = Math.hypot(arc[1][0] - arc[0][0], arc[1][1] - arc[0][1]);
+  const pts: [number, number][] = [];
+  if (side > 0) pts.push([0, 0]);
+  if (side > 2 * chord) pts.push([0, side - chord]);
+  pts.push(...arc);
+  if (side > 2 * chord) pts.push([width, side - chord]);
+  if (side > 0) pts.push([width, 0]);
+  return pts.map(([x, y]) => [clean(x), clean(y)]);
+}
+
+const clean = (v: number) => (Math.abs(v) < 1e-9 ? 0 : v);
+
+function randomGroupId(): string {
+  return `cyl-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+}
+
+/**
+ * Converts a recognized shape (centre-based, scene coordinates) into the
+ * Excalidraw element props that draw it. Box shapes become one element; a
+ * cylinder becomes an ellipse (the top) plus a line (sides and bottom arc)
+ * sharing one group id, so it selects and moves as one shape.
+ */
+export function shapeToSkeletons(
+  shape: RecognizedShape,
+  style: StrokeStyle,
+  options: { groupId?: string } = {},
+): ShapeSkeleton[] {
   const common = {
     strokeColor: style.strokeColor,
     strokeWidth: style.strokeWidth,
@@ -125,25 +167,68 @@ export function shapeToSkeleton(shape: RecognizedShape, style: StrokeStyle): Sha
     strokeStyle: "solid" as const,
   };
 
-  if (shape.kind === "rectangle" || shape.kind === "ellipse") {
+  if (shape.kind === "rectangle" || shape.kind === "diamond") {
     const width = Math.abs(shape.width);
     const height = Math.abs(shape.height);
-    return {
-      ...common,
-      type: shape.kind,
-      x: shape.cx - width / 2,
-      y: shape.cy - height / 2,
-      width,
-      height,
-      angle: normalizeAngle(shape.angle),
-      roundness: shape.kind === "rectangle" ? { type: ROUNDNESS_ADAPTIVE } : null,
-    };
+    return [
+      {
+        ...common,
+        type: shape.kind,
+        x: shape.cx - width / 2,
+        y: shape.cy - height / 2,
+        width,
+        height,
+        angle: 0,
+        roundness: { type: shape.kind === "rectangle" ? ROUNDNESS_ADAPTIVE : ROUNDNESS_PROPORTIONAL },
+      },
+    ];
   }
 
-  return linearSkeleton(shape.kind, shape.start, shape.end, common, {
-    startArrowhead: null,
-    endArrowhead: shape.kind === "arrow" ? "arrow" : null,
-  });
+  if (shape.kind === "cylinder") {
+    const width = Math.abs(shape.width);
+    const height = Math.abs(shape.height);
+    const capHeight = Math.min(Math.abs(shape.capHeight), height);
+    const left = shape.cx - width / 2;
+    const top = shape.cy - height / 2;
+    const groupIds = [options.groupId ?? randomGroupId()];
+    const points = cylinderBodyPoints(width, height, capHeight);
+    let maxY = 0;
+    for (const [, y] of points) maxY = Math.max(maxY, y);
+    return [
+      {
+        ...common,
+        type: "ellipse",
+        x: left,
+        y: top,
+        width,
+        height: capHeight,
+        angle: 0,
+        roundness: null,
+        groupIds,
+      },
+      {
+        ...common,
+        type: "line",
+        x: left,
+        y: top + capHeight / 2,
+        width,
+        height: maxY,
+        angle: 0,
+        points,
+        roundness: { type: ROUNDNESS_PROPORTIONAL },
+        startArrowhead: null,
+        endArrowhead: null,
+        groupIds,
+      },
+    ];
+  }
+
+  return [
+    linearSkeleton(shape.kind, shape.start, shape.end, common, {
+      startArrowhead: null,
+      endArrowhead: shape.kind === "arrow" ? "arrow" : null,
+    }),
+  ];
 }
 
 /** Builds line/arrow props from two scene-space endpoints. */

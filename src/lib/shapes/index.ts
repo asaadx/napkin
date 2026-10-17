@@ -1,6 +1,9 @@
 /**
  * Pure freehand-stroke recognizer. No React, no Excalidraw imports.
  *
+ * Recognized set: rectangle, diamond, database cylinder, line, arrow. Loops,
+ * circles and everything else stay as ink.
+ *
  * Philosophy: precision over recall. Every classifier below is a chain of
  * independent sanity checks, and any failed check returns null. A missed
  * conversion costs the user nothing; a wrong one makes the pen feel hostile.
@@ -8,11 +11,24 @@
 
 export type Point = { x: number; y: number };
 
+/** A database cylinder: a top ellipse `capHeight` tall, vertical sides and a matching bottom arc. */
+export type CylinderShape = {
+  kind: "cylinder";
+  /** Centre of the whole cylinder's (axis-aligned) bounding box. */
+  cx: number;
+  cy: number;
+  width: number;
+  /** Total height, from the top of the cap to the bottom of the lower arc. */
+  height: number;
+  /** Height of the top ellipse (also the depth of the bottom arc, doubled). */
+  capHeight: number;
+};
+
 export type RecognizedShape =
-  // Center-based so rotation is unambiguous. angle is in radians, clockwise, as in Excalidraw.
-  // Snap angle to 0 when within ~10° of axis-aligned (also treat ~90° as 0 with width/height swapped).
-  | { kind: "rectangle"; cx: number; cy: number; width: number; height: number; angle: number }
-  | { kind: "ellipse"; cx: number; cy: number; width: number; height: number; angle: number }
+  // Box shapes are centre-based and always axis-aligned.
+  | { kind: "rectangle"; cx: number; cy: number; width: number; height: number }
+  | { kind: "diamond"; cx: number; cy: number; width: number; height: number }
+  | CylinderShape
   | { kind: "line"; start: Point; end: Point }
   | { kind: "arrow"; start: Point; end: Point }; // head is at `end`
 
@@ -43,25 +59,29 @@ const CLOSED_MAX_GAP = 0.12;
 /** Overshoot trimming may discard at most this fraction of the path at each end. */
 const OVERSHOOT_WINDOW = 0.15;
 
-/** Ellipse: mean and max |normalized radius - 1|. */
-const ELLIPSE_MEAN_ERR = 0.06;
-const ELLIPSE_MAX_ERR = 0.22;
-
 /** Rectangle: mean distance to fitted boundary, as a fraction of (a+b)/2 (half-extents). */
 const RECT_MEAN_ERR = 0.07;
 /** Rectangle: each fitted corner must have ink within this fraction of (a+b). */
 const RECT_CORNER_REACH = 0.12;
 /** Rectangle: each side must be covered by ink over this fraction of its length. */
 const RECT_SIDE_COVERAGE = 0.6;
+/** Rectangle: boxes tilted up to this much are straightened; beyond it, null (or a diamond). */
+const RECT_MAX_TILT = 25 * DEG;
+
+/** Diamond: each vertex must sit within this fraction of the box's extent from its side's midpoint. */
+const DIAMOND_VERTEX_OFFSET = 0.1;
+/** Diamond: mean / max distance to the fitted rhombus, as a fraction of the centre-to-edge distance. */
+const DIAMOND_MEAN_ERR = 0.08;
+const DIAMOND_MAX_ERR = 0.25;
+/** Diamond: each edge must be covered by ink over this fraction of its length. */
+const DIAMOND_EDGE_COVERAGE = 0.6;
 
 /** Closed shapes: minor/major and minimum minor extent (px). */
 const MIN_ASPECT = 0.06;
 const MIN_MINOR = 12;
 
-/** Snap rect/ellipse rotation to axis-aligned within this angle. */
-const ROTATION_SNAP = 10 * DEG;
-/** Snap to square / circle when |w/h - 1| is within this. */
-const ASPECT_SNAP = 0.1;
+/** Two-stroke cylinder: minimum cap width (px). */
+const CYL_MIN_WIDTH = 40;
 
 // ---------------------------------------------------------------------------
 // Geometry helpers
@@ -225,31 +245,49 @@ function centroid(pts: Point[]): Point {
   return { x: x / pts.length, y: y / pts.length };
 }
 
+
 const clean = (v: number) => (Math.abs(v) < 1e-9 ? 0 : v);
-
-/** Normalize a rotation (both shapes are symmetric under a half turn) and snap to axis-aligned. */
-function snapRotation(theta: number, width: number, height: number) {
-  let t = ((theta % Math.PI) + Math.PI) % Math.PI; // [0, π)
-  // A rotation by π/2 is the same shape with width/height swapped.
-  if (t >= Math.PI / 2) { t -= Math.PI / 2; [width, height] = [height, width]; }
-  // Now t in [0, π/2).
-  if (t <= ROTATION_SNAP) return { angle: 0, width, height };
-  if (t >= Math.PI / 2 - ROTATION_SNAP) return { angle: 0, width: height, height: width };
-  return { angle: t, width, height };
-}
-
-function snapAspect(width: number, height: number) {
-  const r = width / height;
-  if (Math.abs(r - 1) <= ASPECT_SNAP) {
-    const s = (width + height) / 2;
-    return { width: s, height: s };
-  }
-  return { width, height };
-}
 
 // ---------------------------------------------------------------------------
 // Closed shapes
 // ---------------------------------------------------------------------------
+
+type Box = { minX: number; minY: number; maxX: number; maxY: number };
+
+function bbox(pts: Point[]): Box {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Approximate distance from (u, v) to the axis-aligned ellipse with radii
+ * (a, b) centred at the origin (Sampson distance: first-order, but accurate
+ * near the curve, which is all a tolerance check needs).
+ */
+function ellipseDistance(u: number, v: number, a: number, b: number): number {
+  const f = (u / a) ** 2 + (v / b) ** 2 - 1;
+  const g = 2 * Math.hypot(u / (a * a), v / (b * b));
+  return g === 0 ? Math.min(a, b) : Math.abs(f) / g;
+}
+
+/** Distance from (u, v) to the boundary of the axis-aligned rectangle with half-extents (a, b). */
+function rectDistance(u: number, v: number, a: number, b: number): number {
+  const ou = Math.abs(u) - a, ov = Math.abs(v) - b;
+  return ou > 0 || ov > 0 ? Math.hypot(Math.max(ou, 0), Math.max(ov, 0)) : Math.min(-ou, -ov);
+}
+
+/** Distance from (u, v) to the boundary of a rectangle with half-extents (a, b) and corner radius r. */
+function roundedRectDistance(u: number, v: number, a: number, b: number, r: number): number {
+  const qx = Math.abs(u) - (a - r), qy = Math.abs(v) - (b - r);
+  const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
+  return Math.abs(outside + Math.min(Math.max(qx, qy), 0) - r);
+}
 
 /**
  * Find the closing of a (nearly) closed stroke, tolerating overshoot past the
@@ -274,48 +312,19 @@ function findLoop(r: Point[]): Point[] | null {
   return loop;
 }
 
-function fitEllipse(loop: Point[]): RecognizedShape | null {
-  const c0 = centroid(loop);
-  let sxx = 0, syy = 0, sxy = 0;
-  for (const p of loop) {
-    const dx = p.x - c0.x, dy = p.y - c0.y;
-    sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
-  }
-  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
-  const cos = Math.cos(theta), sin = Math.sin(theta);
-  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
-  const uv = loop.map((p) => {
-    const dx = p.x - c0.x, dy = p.y - c0.y;
-    const u = dx * cos + dy * sin, v = -dx * sin + dy * cos;
-    if (u < minU) minU = u;
-    if (u > maxU) maxU = u;
-    if (v < minV) minV = v;
-    if (v > maxV) maxV = v;
-    return [u, v] as const;
-  });
-  const a = (maxU - minU) / 2, b = (maxV - minV) / 2;
-  if (a <= 0 || b <= 0) return null;
-  if (Math.min(a, b) / Math.max(a, b) < MIN_ASPECT || 2 * Math.min(a, b) < MIN_MINOR) return null;
-  const cu = (maxU + minU) / 2, cv = (maxV + minV) / 2;
-  let sum = 0, max = 0;
-  for (const [u, v] of uv) {
-    const e = Math.abs(Math.hypot((u - cu) / a, (v - cv) / b) - 1);
-    sum += e;
-    if (e > max) max = e;
-  }
-  if (sum / uv.length > ELLIPSE_MEAN_ERR || max > ELLIPSE_MAX_ERR) return null;
-
-  const cx = c0.x + cu * cos - cv * sin;
-  const cy = c0.y + cu * sin + cv * cos;
-  const snapped = snapRotation(theta, 2 * a, 2 * b);
-  const size = snapAspect(snapped.width, snapped.height);
-  const isCircle = size.width === size.height;
-  return {
-    kind: "ellipse", cx, cy, width: size.width, height: size.height,
-    angle: isCircle ? 0 : clean(snapped.angle),
-  };
+/** A closed stroke that goes around exactly once without doubling back. Returns it resampled, or null. */
+function closedLoop(r: Point[], minDiagonal: number): Point[] | null {
+  const loopRaw = findLoop(r);
+  if (!loopRaw) return null;
+  if (bboxDiagonal(loopRaw) < minDiagonal) return null;
+  const loop = resample(loopRaw, 96);
+  const { turns, backtrack } = winding(loop, centroid(loop));
+  if (Math.abs(Math.round(turns)) !== 1 || Math.abs(turns - Math.round(turns)) > 0.1) return null;
+  if (backtrack > 0.06) return null;
+  return loop;
 }
 
+/** A box, possibly drawn tilted by up to RECT_MAX_TILT; always returned axis-aligned. */
 function fitRectangle(loop: Point[]): RecognizedShape | null {
   // Orientation: edge directions of a rectangle agree modulo 90°, so average 4φ.
   let sc = 0, ss = 0;
@@ -330,7 +339,8 @@ function fitRectangle(loop: Point[]): RecognizedShape | null {
   // Edges must actually agree; a circle/triangle has no dominant 4-fold direction.
   const totalLen = pathLength(loop);
   if (Math.hypot(sc, ss) / totalLen < 0.45) return null;
-  const theta = Math.atan2(ss, sc) / 4;
+  const theta = Math.atan2(ss, sc) / 4; // (-45°, 45°]
+  if (Math.abs(theta) > RECT_MAX_TILT) return null;
   const cos = Math.cos(theta), sin = Math.sin(theta);
   const uv = loop.map((p) => [p.x * cos + p.y * sin, -p.x * sin + p.y * cos] as const);
 
@@ -372,8 +382,7 @@ function fitRectangle(loop: Point[]): RecognizedShape | null {
   for (const [u0, v0] of uv) {
     const u = u0 - cu, v = v0 - cv;
     const ou = Math.abs(u) - a, ov = Math.abs(v) - b;
-    const d = ou > 0 || ov > 0 ? Math.hypot(Math.max(ou, 0), Math.max(ov, 0)) : Math.min(-ou, -ov);
-    sum += d;
+    sum += rectDistance(u, v, a, b);
     // Which side is this point on?
     const near = Math.abs(ou) < Math.abs(ov);
     const k = near ? (u < 0 ? 0 : 1) : v < 0 ? 2 : 3;
@@ -392,25 +401,245 @@ function fitRectangle(loop: Point[]): RecognizedShape | null {
   }
   if (cornerReach.some((d) => d > RECT_CORNER_REACH * (a + b))) return null;
 
+  // Straighten: keep the drawn side lengths, drop the tilt.
   const cx = cu * cos - cv * sin;
   const cy = cu * sin + cv * cos;
-  const snapped = snapRotation(theta, 2 * a, 2 * b);
-  const size = snapAspect(snapped.width, snapped.height);
-  return { kind: "rectangle", cx, cy, width: size.width, height: size.height, angle: clean(snapped.angle) };
+  return { kind: "rectangle", cx: clean(cx), cy: clean(cy), width: 2 * a, height: 2 * b };
+}
+
+/** A rhombus whose four corners sit at the midpoints of its bounding box's sides. */
+function fitDiamond(loop: Point[]): RecognizedShape | null {
+  const box = bbox(loop);
+  const W = box.maxX - box.minX, H = box.maxY - box.minY;
+  if (Math.min(W, H) / Math.max(W, H) < 0.2 || Math.min(W, H) < 2 * MIN_MINOR) return null;
+  const cx = (box.minX + box.maxX) / 2, cy = (box.minY + box.maxY) / 2;
+  const a = W / 2, b = H / 2;
+
+  // The extreme ink in each direction is a vertex, and must be near that side's midpoint.
+  let top = loop[0], bottom = loop[0], left = loop[0], right = loop[0];
+  for (const p of loop) {
+    if (p.y < top.y) top = p;
+    if (p.y > bottom.y) bottom = p;
+    if (p.x < left.x) left = p;
+    if (p.x > right.x) right = p;
+  }
+  if (Math.abs(top.x - cx) > DIAMOND_VERTEX_OFFSET * W) return null;
+  if (Math.abs(bottom.x - cx) > DIAMOND_VERTEX_OFFSET * W) return null;
+  if (Math.abs(left.y - cy) > DIAMOND_VERTEX_OFFSET * H) return null;
+  if (Math.abs(right.y - cy) > DIAMOND_VERTEX_OFFSET * H) return null;
+
+  // Every point near the rhombus |u|/a + |v|/b = 1, and all four edges inked.
+  const k = (a * b) / Math.hypot(a, b); // centre-to-edge distance
+  let sum = 0, max = 0;
+  const cover: [number, number][] = [[Infinity, -Infinity], [Infinity, -Infinity], [Infinity, -Infinity], [Infinity, -Infinity]];
+  for (const p of loop) {
+    const u = p.x - cx, v = p.y - cy;
+    const d = Math.abs(Math.abs(u) / a + Math.abs(v) / b - 1) * k;
+    sum += d;
+    if (d > max) max = d;
+    const q = (u >= 0 ? 0 : 1) + (v >= 0 ? 2 : 0);
+    const t = Math.abs(u) / a; // 0 at the top/bottom vertex, 1 at the left/right vertex
+    if (t < cover[q][0]) cover[q][0] = t;
+    if (t > cover[q][1]) cover[q][1] = t;
+  }
+  if (sum / loop.length > DIAMOND_MEAN_ERR * k || max > DIAMOND_MAX_ERR * k) return null;
+  if (cover.some(([lo, hi]) => !(hi - lo >= DIAMOND_EDGE_COVERAGE))) return null;
+  return { kind: "diamond", cx, cy, width: W, height: H };
+}
+
+/**
+ * Single-stroke "can": a closed outline with straight vertical sides and a
+ * convex elliptical arc at the top and bottom. Must fit that model clearly
+ * better than both a plain rectangle and a plain ellipse.
+ */
+function fitCan(loop: Point[]): CylinderShape | null {
+  const box = bbox(loop);
+  const W = box.maxX - box.minX, H = box.maxY - box.minY;
+  if (W < CYL_MIN_WIDTH || H < 0.5 * W || H > 4 * W) return null;
+  const cx = (box.minX + box.maxX) / 2, cy = (box.minY + box.maxY) / 2;
+  const a = W / 2;
+  const scale = (W + H) / 4;
+
+  const canDist = (p: Point, c: number) => {
+    const u = p.x - cx;
+    const yt = box.minY + c, yb = box.maxY - c;
+    if (p.y < yt) return ellipseDistance(u, p.y - yt, a, c);
+    if (p.y > yb) return ellipseDistance(u, p.y - yb, a, c);
+    return Math.min(Math.abs(u + a), Math.abs(u - a));
+  };
+  const cMin = 0.1 * W, cMax = Math.min(0.4 * W, 0.32 * H);
+  if (cMax <= cMin) return null;
+  let bestC = cMin, bestMean = Infinity;
+  for (let i = 0; i <= 24; i++) {
+    const c = cMin + ((cMax - cMin) * i) / 24;
+    let s = 0;
+    for (const p of loop) s += canDist(p, c);
+    if (s / loop.length < bestMean) { bestMean = s / loop.length; bestC = c; }
+  }
+  const c = bestC;
+  // The caps must visibly curve, and not be a pill's semicircles.
+  if (c < 0.13 * W || c > cMax - (cMax - cMin) / 24 + 1e-9) return null;
+  if (bestMean > 0.03 * scale) return null;
+  let max = 0;
+  for (const p of loop) max = Math.max(max, canDist(p, c));
+  if (max > 0.12 * scale) return null;
+
+  // Both sides inked along most of the straight band.
+  const yt = box.minY + c, yb = box.maxY - c;
+  const band = yb - yt;
+  if (band < 0.35 * H) return null;
+  const sideCover = [[Infinity, -Infinity], [Infinity, -Infinity]];
+  for (const p of loop) {
+    if (p.y < yt || p.y > yb) continue;
+    const s = p.x < cx ? 0 : 1;
+    sideCover[s][0] = Math.min(sideCover[s][0], p.y);
+    sideCover[s][1] = Math.max(sideCover[s][1], p.y);
+  }
+  if (sideCover.some(([lo, hi]) => !(hi - lo >= 0.7 * band))) return null;
+
+  // Clearly better than the nearest ellipse, and, judged on the caps alone
+  // (where the two models differ), than the nearest rounded rectangle.
+  const b = H / 2;
+  let ellMean = 0;
+  for (const p of loop) ellMean += ellipseDistance(p.x - cx, p.y - cy, a, b);
+  ellMean /= loop.length;
+  const capPts = loop.filter((p) => p.y < yt || p.y > yb);
+  let canCap = 0;
+  for (const p of capPts) canCap += canDist(p, c) ** 2;
+  let rectCap = Infinity;
+  for (let i = 0; i <= 24; i++) {
+    const rr = (Math.min(a, b) * i) / 24;
+    let s = 0;
+    for (const p of capPts) s += roundedRectDistance(p.x - cx, p.y - cy, a, b, rr) ** 2;
+    rectCap = Math.min(rectCap, s);
+  }
+  const rectRatio = Math.sqrt(rectCap / Math.max(1e-9, canCap));
+  if (rectRatio < 1.1 || ellMean < 2 * bestMean) return null;
+
+  // Caps sag toward the sides (a box's flat top and bottom don't).
+  const sags: [number[], number[]] = [[], []];
+  for (const p of loop) {
+    const t = Math.abs(p.x - cx) / a;
+    if (t < 0.65 || t > 0.9) continue;
+    if (p.y < yt) sags[0].push(p.y - box.minY);
+    else if (p.y > yb) sags[1].push(box.maxY - p.y);
+  }
+  for (const s of sags) {
+    if (s.length < 2) return null;
+    s.sort((x, y) => x - y);
+    const median = s[Math.floor(s.length / 2)];
+    if (median < Math.max(0.25 * c, 0.04 * W)) return null;
+  }
+
+  return { kind: "cylinder", cx, cy, width: W, height: H, capHeight: 2 * c };
 }
 
 function recognizeClosed(r: Point[]): RecognizedShape | null {
-  const loopRaw = findLoop(r);
-  if (!loopRaw) return null;
-  if (bboxDiagonal(loopRaw) < MIN_CLOSED_DIAGONAL) return null;
-  const loop = resample(loopRaw, 96);
-  // Must go around exactly once, without doubling back much.
-  const { turns, backtrack } = winding(loop, centroid(loop));
-  if (Math.abs(Math.round(turns)) !== 1 || Math.abs(turns - Math.round(turns)) > 0.1) return null;
-  if (backtrack > 0.06) return null;
-  // Rectangle checks demand ink in four corners, which an ellipse never has, so
-  // try it first; the ellipse checks reject anything with corners.
-  return fitRectangle(loop) ?? fitEllipse(loop);
+  const loop = closedLoop(r, MIN_CLOSED_DIAGONAL);
+  if (!loop) return null;
+  // Each fitter demands features the others' shapes lack (vertices at the
+  // side midpoints; straight sides with curved caps; four corners), so the
+  // order only matters for borderline input.
+  return fitDiamond(loop) ?? fitCan(loop) ?? fitRectangle(loop);
+}
+
+// ---------------------------------------------------------------------------
+// Two-stroke cylinder
+// ---------------------------------------------------------------------------
+
+type Cap = Box & { cx: number; cy: number; rx: number; ry: number };
+
+/** A flat, roughly elliptical, axis-aligned loop: the top of a cylinder. */
+function asCap(points: Point[]): Cap | null {
+  const pts = dedupe(points);
+  if (pts.length < 3 || bboxDiagonal(pts) < CYL_MIN_WIDTH) return null;
+  const loop = closedLoop(resample(pts, N), CYL_MIN_WIDTH);
+  if (!loop) return null;
+  const box = bbox(loop);
+  const rx = (box.maxX - box.minX) / 2, ry = (box.maxY - box.minY) / 2;
+  if (2 * rx < CYL_MIN_WIDTH || ry / rx < 0.08 || ry / rx > 0.7) return null;
+  const cx = (box.minX + box.maxX) / 2, cy = (box.minY + box.maxY) / 2;
+  const scale = (rx + ry) / 2;
+  let sum = 0, max = 0;
+  for (const p of loop) {
+    const d = ellipseDistance(p.x - cx, p.y - cy, rx, ry);
+    sum += d;
+    if (d > max) max = d;
+  }
+  if (sum / loop.length > 0.08 * scale || max > 0.3 * scale) return null;
+  return { ...box, cx, cy, rx, ry };
+}
+
+/** Fraction of movement along an axis that goes the wrong way. */
+function backtrackRatio(pts: Point[], from: number, to: number, axis: "x" | "y", sign: 1 | -1): number {
+  let good = 0, bad = 0;
+  for (let i = from + 1; i <= to; i++) {
+    const d = (pts[i][axis] - pts[i - 1][axis]) * sign;
+    if (d > 0) good += d;
+    else bad -= d;
+  }
+  return bad / Math.max(1e-9, good + bad);
+}
+
+/** A "U" hanging from the cap's left and right extremes: the sides and bottom of a cylinder. Returns its lowest y. */
+function asBody(points: Point[], cap: Cap): number | null {
+  const pts = dedupe(points);
+  if (pts.length < 3) return null;
+  const r = resample(pts, 64);
+  // Orient it to run left side → bottom → right side.
+  const path = r[0].x <= r[r.length - 1].x ? r : [...r].reverse();
+  const n = path.length;
+  const L = path[0], R = path[n - 1];
+  const W = 2 * cap.rx;
+  const tolX = 0.2 * W, tolY = cap.ry + 0.15 * W;
+  if (Math.abs(L.x - cap.minX) > tolX || Math.abs(R.x - cap.maxX) > tolX) return null;
+  if (Math.abs(L.y - cap.cy) > tolY || Math.abs(R.y - cap.cy) > tolY) return null;
+
+  const box = bbox(path);
+  if (box.minX < cap.minX - tolX || box.maxX > cap.maxX + tolX) return null;
+  if (box.minY < cap.minY - 0.15 * W) return null;
+  const bottom = box.maxY;
+  const D = bottom - cap.cy;
+  if (D < Math.max(1.8 * cap.ry, 0.25 * W, 20) || D > 5 * W) return null;
+
+  // Down, across, up: the lowest point splits it into two monotone halves.
+  let k = 0;
+  for (let i = 1; i < n; i++) if (path[i].y > path[k].y) k = i;
+  if (k < 0.15 * n || k > 0.85 * n) return null;
+  if (backtrackRatio(path, 0, k, "y", 1) > 0.2) return null;
+  if (backtrackRatio(path, k, n - 1, "y", -1) > 0.2) return null;
+  if (backtrackRatio(path, 0, n - 1, "x", 1) > 0.25) return null;
+
+  // Vertical sides: each half crosses two depth levels at about the same x, far apart.
+  const xAt = (from: number, to: number, step: 1 | -1, level: number) => {
+    for (let i = from; i !== to; i += step) if (path[i].y >= level) return path[i].x;
+    return path[to].x;
+  };
+  const lvl = (f: number) => cap.cy + f * D;
+  const l1 = xAt(0, k, 1, lvl(0.2)), l2 = xAt(0, k, 1, lvl(0.6));
+  const r1 = xAt(n - 1, k, -1, lvl(0.2)), r2 = xAt(n - 1, k, -1, lvl(0.6));
+  if (Math.abs(l1 - l2) > 0.1 * W || Math.abs(r1 - r2) > 0.1 * W) return null;
+  if (r2 - l2 < 0.85 * W) return null;
+
+  // Not a scribble.
+  if (pathLength(path) > 1.5 * (2 * D + W)) return null;
+  return bottom;
+}
+
+function pairCylinder(capPts: Point[], bodyPts: Point[]): CylinderShape | null {
+  const cap = asCap(capPts);
+  if (!cap) return null;
+  const bottom = asBody(bodyPts, cap);
+  if (bottom === null) return null;
+  const top = cap.minY;
+  return {
+    kind: "cylinder",
+    cx: cap.cx,
+    cy: (top + bottom) / 2,
+    width: 2 * cap.rx,
+    height: bottom - top,
+    capHeight: 2 * cap.ry,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +761,15 @@ export function recognizeShape(points: Point[]): RecognizedShape | null {
   const open = recognizeOpen(r);
   if (open) return open;
   return recognizeClosed(r);
+}
+
+/**
+ * Two-stroke database cylinder: one stroke is a flat loop (the top ellipse),
+ * the other a "U" whose ends land near the loop's left and right extremes and
+ * that hangs below it. Either drawing order works. Returns null unless confident.
+ */
+export function detectCylinder(a: Point[], b: Point[]): CylinderShape | null {
+  return pairCylinder(a, b) ?? pairCylinder(b, a);
 }
 
 /** Second-stroke arrowhead: is `points` a "V"/caret drawn near one end of `line`, pointing outward along it?

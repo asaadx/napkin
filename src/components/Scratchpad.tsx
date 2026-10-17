@@ -17,13 +17,13 @@ import type {
   ExcalidrawLinearElement,
 } from "@excalidraw/excalidraw/element/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
-import { detectArrowhead, recognizeShape } from "@/lib/shapes";
+import { detectArrowhead, detectCylinder, recognizeShape } from "@/lib/shapes";
 import {
   elementPointsToScene,
   findArrowheadTarget,
   linearEndpoints,
   linearSkeleton,
-  shapeToSkeleton,
+  shapeToSkeletons,
   type ArrowheadCandidate,
   type ShapeSkeleton,
 } from "@/lib/scratchpad/convert";
@@ -48,6 +48,10 @@ type InitialData = ExcalidrawProps["initialData"];
 const SAVE_DELAY_MS = 500;
 /** A stroke drawn within this window after a line is converted may become its arrowhead. */
 const ARROWHEAD_WINDOW_MS = 4000;
+/** An unconverted stroke stays eligible to pair into a two-stroke cylinder for this long. */
+const CYLINDER_WINDOW_MS = 5000;
+/** How many recent unconverted strokes are tried as the other half of a cylinder. */
+const CYLINDER_CANDIDATES = 3;
 const SMART_SHAPES_KEY = "napkin:smartShapes";
 const storageKey = (slug: string) => `napkin:scene:${slug}`;
 
@@ -93,16 +97,23 @@ function usePrefersDark() {
 const isLinear = (el: ExcalidrawElement): el is ExcalidrawLinearElement =>
   el.type === "line" || el.type === "arrow";
 
-/** Turns our plain props into a full Excalidraw element. */
-function buildElement(lib: ExcalidrawModule, skeleton: ShapeSkeleton): ExcalidrawElement {
-  const [el] = lib.convertToExcalidrawElements([
-    skeleton as unknown as ExcalidrawElementSkeleton,
-  ]);
+/** Turns our plain props into full Excalidraw elements (one per skeleton, in order). */
+function buildElements(lib: ExcalidrawModule, skeletons: ShapeSkeleton[]): ExcalidrawElement[] {
+  const els = lib.convertToExcalidrawElements(
+    skeletons as unknown as ExcalidrawElementSkeleton[],
+  );
   // convertToExcalidrawElements substitutes a default size for a 0 width/height
   // on lines; keep the real extent so bounds and hit-testing match the points.
-  return skeleton.type === "line" || skeleton.type === "arrow"
-    ? ({ ...el, width: skeleton.width, height: skeleton.height } as ExcalidrawElement)
-    : el;
+  return els.map((el, i) => {
+    const sk = skeletons[i];
+    return sk.type === "line" || sk.type === "arrow"
+      ? ({ ...el, width: sk.width, height: sk.height } as ExcalidrawElement)
+      : el;
+  });
+}
+
+function buildElement(lib: ExcalidrawModule, skeleton: ShapeSkeleton): ExcalidrawElement {
+  return buildElements(lib, [skeleton])[0];
 }
 
 function SmartShapesToggle({
@@ -115,7 +126,7 @@ function SmartShapesToggle({
   return (
     <label
       className="flex h-9 cursor-pointer select-none items-center gap-2 rounded-lg px-2 text-xs text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
-      title="Turn freehand rectangles, ellipses, lines and arrows into clean shapes"
+      title="Turn freehand boxes, diamonds, database cylinders, lines and arrows into clean shapes"
     >
       <span className="whitespace-nowrap">Smart shapes</span>
       <button
@@ -147,6 +158,8 @@ export function Scratchpad({ slug }: { slug: string }) {
   /** Freedraw ids we've already run the recognizer on (survives undo/redo). */
   const processed = useRef(new Set<string>());
   const recentLine = useRef<{ id: string; at: number } | null>(null);
+  /** Recent strokes left as ink, which may be one half of a two-stroke cylinder. */
+  const recentInk = useRef<{ id: string; at: number }[]>([]);
 
   const [smartShapes, setSmartShapes] = useState(() =>
     typeof window === "undefined" ? true : loadSmartShapes(),
@@ -242,9 +255,36 @@ export function Scratchpad({ slug }: { slug: string }) {
         captureUpdate: mod.CaptureUpdateAction.IMMEDIATELY,
       });
 
-    // 1. Is this a second stroke that puts an arrowhead on a line?
+    const now = Date.now();
+
+    // 1. Does this stroke complete a cylinder with a recent ink stroke
+    //    (a flat loop and a "U" beneath it, in either order)?
+    recentInk.current = recentInk.current.filter(
+      (r) => r.id !== id && now - r.at <= CYLINDER_WINDOW_MS,
+    );
+    for (let i = recentInk.current.length - 1; i >= 0; i--) {
+      const other = elements.find((el) => el.id === recentInk.current[i].id);
+      if (!other || other.isDeleted || other.type !== "freedraw") continue;
+      const cylinder = detectCylinder(
+        elementPointsToScene(other as ExcalidrawFreeDrawElement),
+        points,
+      );
+      if (!cylinder) continue;
+      const parts = buildElements(mod, shapeToSkeletons(cylinder, freedraw));
+      const next = elements.flatMap((el) => {
+        if (el.id === other.id) return [mod.newElementWith(el, { isDeleted: true })];
+        if (el.id === freedraw.id) return [mod.newElementWith(el, { isDeleted: true }), ...parts];
+        return [el];
+      });
+      commit(next);
+      recentInk.current.splice(i, 1);
+      recentLine.current = null;
+      return;
+    }
+
+    // 2. Is this a second stroke that puts an arrowhead on a line?
     const recent =
-      recentLine.current && Date.now() - recentLine.current.at <= ARROWHEAD_WINDOW_MS
+      recentLine.current && now - recentLine.current.at <= ARROWHEAD_WINDOW_MS
         ? recentLine.current.id
         : null;
     const candidates: ArrowheadCandidate[] = [];
@@ -282,20 +322,25 @@ export function Scratchpad({ slug }: { slug: string }) {
         return [el];
       });
       commit(next);
-      recentLine.current = { id: replacement.id, at: Date.now() };
+      recentLine.current = { id: replacement.id, at: now };
       return;
     }
 
-    // 2. Otherwise, is the stroke itself a shape?
+    // 3. Otherwise, is the stroke itself a shape?
     const shape = recognizeShape(points);
-    if (!shape) return;
-    const created = buildElement(mod, shapeToSkeleton(shape, freedraw));
+    if (!shape) {
+      // Leave it as ink, but it may yet become half of a cylinder.
+      recentInk.current = [...recentInk.current, { id, at: now }].slice(-CYLINDER_CANDIDATES);
+      return;
+    }
+    const created = buildElements(mod, shapeToSkeletons(shape, freedraw));
     commit(
       elements.flatMap((el) =>
-        el.id === freedraw.id ? [mod.newElementWith(el, { isDeleted: true }), created] : [el],
+        el.id === freedraw.id ? [mod.newElementWith(el, { isDeleted: true }), ...created] : [el],
       ),
     );
-    recentLine.current = isLinear(created) ? { id: created.id, at: Date.now() } : null;
+    const single = created.length === 1 ? created[0] : null;
+    recentLine.current = single && isLinear(single) ? { id: single.id, at: now } : null;
   }, []);
 
   const handlePointerUp = useCallback<NonNullable<ExcalidrawProps["onPointerUp"]>>(() => {
