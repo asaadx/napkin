@@ -83,29 +83,3 @@ export const More = make(
 export const ArrowRight = make(<path d="M5 12h14M13 6l6 6-6 6" />);
 export const Restart = make(<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" />);
 export const Flag = make(<path d="M4 22V4M4 4h12l-2 4 2 4H4" />);
-
-export function Logo({ size = 20 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className="block shrink-0">
-      <path
-        d="M4 3h11l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"
-        fill="currentColor"
-        opacity=".18"
-      />
-      <path
-        d="M4 3h11l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z M15 3v5h5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8 15c1.5-2.5 3-2.5 4 0s2.5 2.5 4 0"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
