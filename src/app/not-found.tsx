@@ -14,7 +14,7 @@ export default function NotFound() {
         </h1>
         <p className="text-fg-2">It may have been renamed or removed.</p>
         <Link
-          href="/"
+          href="/problems"
           className="press mt-2 inline-flex h-8 items-center rounded-full bg-panel px-3.5 font-medium shadow-[inset_0_0_0_1px_var(--color-line)] hover:bg-hover"
         >
           Back to all problems

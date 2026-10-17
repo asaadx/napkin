@@ -1,15 +1,20 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Wordmark } from "@/components/Wordmark";
 import { useTheme } from "@/components/theme/useTheme";
 import { Moon, Sun } from "@/components/workspace/icons";
 
-export function SiteHeader() {
+/** `actions` sit just left of the theme toggle (the landing page puts its call to action there). */
+export function SiteHeader({ actions }: { actions?: ReactNode } = {}) {
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-panel/85 backdrop-blur-md backdrop-saturate-150">
       <div className="mx-auto flex h-14 w-full max-w-[1100px] items-center justify-between gap-6 px-4 sm:px-6">
         <Wordmark className="-ml-1.5" />
-        <ThemeToggle />
+        <div className="flex items-center gap-1.5">
+          {actions}
+          <ThemeToggle />
+        </div>
       </div>
     </header>
   );
