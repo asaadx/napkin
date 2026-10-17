@@ -7,9 +7,7 @@ import "./voice-dock.css";
 
 const noopSubscribe = () => () => {};
 
-/** Expanded pill width (keep in sync with .vd-dock[data-rec] .vd-pill in voice-dock.css). */
-const EXPANDED_W = 212;
-/** Minimum gap between the expanded pill and the container edges (or Excalidraw's mobile bar). */
+/** Gap between the dock and Excalidraw's mobile bottom bar. */
 const EDGE = 12;
 
 /**
@@ -44,28 +42,20 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 /**
- * Centers the dock on the viewport (so it lines up with the top bar's centered
- * Submit) while it sits inside the canvas container, which is offset by the
- * side card. It only clamps when the container is too narrow for the expanded
- * pill to stay centered without sliding under the side card. Excalidraw's
- * desktop controls sit on the right edge, so the bottom edge is free; its
- * compact (mobile) layout has a full-width bottom bar, so there the dock rises
- * above it. Writes `left`/`bottom`/`data-covered` directly; no re-render.
+ * The dock is centered on the canvas container with CSS (left-1/2), so it
+ * shares a center line with Excalidraw's top toolbar whether the side card is
+ * open or collapsed. Excalidraw's desktop controls (zoom, undo) sit in the
+ * bottom corners, so the bottom center is free; its compact (mobile) layout
+ * has a full-width bottom bar, so there the dock rises above it. Writes
+ * `bottom`/`data-covered` directly; no re-render.
  */
-function useViewportCentered(ref: React.RefObject<HTMLElement | null>) {
+function useMobileBarAvoidance(ref: React.RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
     const el = ref.current;
     const parent = el?.offsetParent as HTMLElement | null;
     if (!el || !parent) return;
     const update = () => {
       const r = parent.getBoundingClientRect();
-      const half = EXPANDED_W / 2;
-      const want = window.innerWidth / 2 - r.left;
-      const x =
-        r.width < EXPANDED_W + 2 * EDGE
-          ? r.width / 2
-          : Math.min(Math.max(want, EDGE + half), r.width - EDGE - half);
-      el.style.left = `${Math.round(x)}px`;
       const bar = parent.querySelector(".excalidraw--mobile .App-bottom-bar .App-toolbar")?.getBoundingClientRect();
       el.style.bottom = bar && bar.height ? `${Math.round(r.bottom - bar.top + EDGE)}px` : "";
       // There, the ☰ menu and style panel open upward from that bar, over the
@@ -102,7 +92,7 @@ function VoiceDockContent({ slug }: { slug: string }) {
   /** Unsupported browsers: the note shows on hover/focus, or briefly after a press. */
   const [tipPinned, setTipPinned] = useState(false);
   const dockRef = useRef<HTMLDivElement>(null);
-  useViewportCentered(dockRef);
+  useMobileBarAvoidance(dockRef);
 
   const alertMessage = supported && error && error !== dismissedError ? error : null;
 

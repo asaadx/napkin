@@ -28,7 +28,7 @@
   transition: width 180ms var(--vd-ease);
 }
 .vd-dock[data-rec] .vd-pill {
-  width: 212px; /* EXPANDED_W in VoiceDock.tsx */
+  width: 212px;
   transition-duration: 240ms;
 }
 
