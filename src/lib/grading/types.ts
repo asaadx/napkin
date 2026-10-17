@@ -54,15 +54,26 @@ export type Submission = {
   durationMs: number;
   transcriptWords: number;
   shapeCount: number;
+  /** The interview round the candidate was on when they submitted (1-based). */
+  round: number;
+  /** Clarifying question ids asked before submitting. */
+  asked: string[];
   result: GradeResult;
   /** Always true until real AI grading ships. */
   mocked: true;
 };
 
-/** The parts of a prompt the grader reads. A subset of the server-side `Prompt`. */
+export type GradingRound = { index: number; title?: string; constraints: string[] };
+export type GradingClarifying = { id: string; question: string; answer: string; round: number };
+
+/**
+ * The parts of a prompt the grader reads. A structural subset of the
+ * server-side `Prompt`, so a full `Prompt` can be passed as is.
+ * `rounds` may include round 1; if it doesn't, `functional` stands in for it.
+ */
 export type GradingPrompt = {
   title: string;
   functional?: string[];
-  nonFunctional?: string[];
-  scale?: string[];
+  rounds?: GradingRound[];
+  clarifying?: GradingClarifying[];
 };

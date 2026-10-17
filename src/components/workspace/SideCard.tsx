@@ -1,11 +1,10 @@
 "use client";
 
 import { useId, useRef } from "react";
-import Markdown from "react-markdown";
-import { DifficultyBadge } from "@/components/DifficultyBadge";
 import { SubmissionsTab } from "@/components/grading/SubmissionsTab";
 import type { Prompt } from "@/lib/prompts";
 import { Bulb, ChevronDown, Doc, History, PanelLeft } from "./icons";
+import { InterviewDescription, type Interview } from "./InterviewDescription";
 
 export type SideTab = "description" | "hints" | "submissions";
 
@@ -14,75 +13,6 @@ const TABS: { id: SideTab; label: string; Icon: typeof Doc }[] = [
   { id: "hints", label: "Hints", Icon: Bulb },
   { id: "submissions", label: "Submissions", Icon: History },
 ];
-
-function Eyebrow({ children }: { children: React.ReactNode }) {
-  return (
-    <h3 className="mb-2 mt-[18px] text-[11.5px] font-medium uppercase tracking-[0.07em] text-fg-3">
-      {children}
-    </h3>
-  );
-}
-
-function Bullets({ items }: { items: string[] }) {
-  return (
-    <ul className="grid list-disc gap-[5px] pl-[18px] marker:text-fg-3">
-      {items.map((item) => (
-        <li key={item}>{item}</li>
-      ))}
-    </ul>
-  );
-}
-
-function Description({ prompt }: { prompt: Prompt }) {
-  return (
-    <div className="px-[22px] pb-7 pt-[22px]">
-      <h1 className="mb-2.5 text-[22px] font-semibold leading-[1.25] tracking-[-0.015em] text-balance">
-        {prompt.title}
-      </h1>
-      <div className="mb-3.5 flex flex-wrap items-center gap-1.5">
-        <DifficultyBadge difficulty={prompt.difficulty} />
-      </div>
-      <p className="text-fg-2">{prompt.summary}</p>
-
-      {prompt.functional.length > 0 && (
-        <section>
-          <Eyebrow>Functional requirements</Eyebrow>
-          <Bullets items={prompt.functional} />
-        </section>
-      )}
-      {prompt.nonFunctional.length > 0 && (
-        <section>
-          <Eyebrow>Non-functional requirements</Eyebrow>
-          <Bullets items={prompt.nonFunctional} />
-        </section>
-      )}
-      {prompt.scale.length > 0 && (
-        <section>
-          <Eyebrow>Scale</Eyebrow>
-          {/* LeetCode "Constraints" style: each line as its own mono block. */}
-          <ul className="grid gap-1.5">
-            {prompt.scale.map((s) => (
-              <li
-                key={s}
-                className="rounded-lg bg-panel-2 px-3 py-[7px] font-mono text-[12.5px] leading-[1.55] text-fg"
-              >
-                {s}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {prompt.body && (
-        <section>
-          <Eyebrow>Context</Eyebrow>
-          <div className="prompt-body">
-            <Markdown>{prompt.body}</Markdown>
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
 
 function Hints({
   hints,
@@ -153,8 +83,10 @@ export function SideCard({
   hintsRevealed,
   onRevealHint,
   submissionCount,
+  interview,
 }: {
   prompt: Prompt;
+  interview: Interview;
   open: boolean;
   tab: SideTab;
   onTab: (tab: SideTab) => void;
@@ -238,14 +170,15 @@ export function SideCard({
             aria-labelledby={`${baseId}-tab-${tab}`}
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
-            {tab === "description" && <Description prompt={prompt} />}
+            {tab === "description" && <InterviewDescription prompt={prompt} interview={interview} />}
             {tab === "hints" && (
               <Hints hints={prompt.hints} revealed={hintsRevealed} onReveal={onRevealHint} />
             )}
-            {tab === "submissions" && <SubmissionsTab />}
+            {tab === "submissions" && <SubmissionsTab rounds={prompt.rounds} />}
           </div>
         </div>
       </div>
     </aside>
   );
 }
+

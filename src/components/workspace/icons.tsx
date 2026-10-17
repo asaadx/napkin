@@ -73,6 +73,16 @@ export const Sparkle = make(
   <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />,
 );
 export const Pause = make(<path d="M9 5v14M15 5v14" />);
+export const More = make(
+  <>
+    <circle cx="5" cy="12" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />
+  </>,
+);
+export const ArrowRight = make(<path d="M5 12h14M13 6l6 6-6 6" />);
+export const Restart = make(<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" />);
+export const Flag = make(<path d="M4 22V4M4 4h12l-2 4 2 4H4" />);
 
 export function Logo({ size = 20 }: { size?: number }) {
   return (

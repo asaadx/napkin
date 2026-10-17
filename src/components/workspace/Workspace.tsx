@@ -6,6 +6,7 @@ import type { PromptSummary } from "@/components/problems/ProblemList";
 import { Scratchpad } from "@/components/Scratchpad";
 import { VoiceDock } from "@/components/voice/VoiceDock";
 import { useGrading } from "@/lib/grading";
+import { useInterview } from "@/lib/interview";
 import type { Prompt } from "@/lib/prompts";
 import { ProblemsDrawer } from "./ProblemsDrawer";
 import { PromptPill } from "./PromptPill";
@@ -17,6 +18,7 @@ import { useShortcuts } from "./useShortcuts";
 export function Workspace({ prompt, prompts }: { prompt: Prompt; prompts: PromptSummary[] }) {
   const router = useRouter();
   const { submissions, status, submit } = useGrading();
+  const interview = useInterview(prompt.slug, prompt.rounds.length);
 
   const [sideOpen, setSideOpen] = useState(true);
   const [tab, setTab] = useState<SideTab>("description");
@@ -70,6 +72,7 @@ export function Workspace({ prompt, prompts }: { prompt: Prompt; prompts: Prompt
           hintsRevealed={hintsRevealed}
           onRevealHint={() => setHintsRevealed((n) => Math.min(n + 1, prompt.hints.length))}
           submissionCount={submissions.length}
+          interview={interview}
         />
 
         <main className="relative min-w-0 flex-1">
@@ -77,6 +80,8 @@ export function Workspace({ prompt, prompts }: { prompt: Prompt; prompts: Prompt
           <PromptPill
             title={prompt.title}
             difficulty={prompt.difficulty}
+            round={interview.round}
+            totalRounds={interview.totalRounds}
             visible={!sideOpen}
             onOpen={() => setSideOpen(true)}
           />

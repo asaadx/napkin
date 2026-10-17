@@ -13,11 +13,15 @@ const DIFF_COLOR: Record<Difficulty, string> = {
 export function PromptPill({
   title,
   difficulty,
+  round,
+  totalRounds,
   visible,
   onOpen,
 }: {
   title: string;
   difficulty: Difficulty;
+  round: number;
+  totalRounds: number;
   visible: boolean;
   onOpen: () => void;
 }) {
@@ -25,7 +29,7 @@ export function PromptPill({
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`Open prompt: ${title} (P)`}
+      aria-label={`Open prompt: ${title}, round ${round} of ${totalRounds} (P)`}
       aria-hidden={!visible || undefined}
       tabIndex={visible ? 0 : -1}
       data-hidden={!visible || undefined}
@@ -36,6 +40,14 @@ export function PromptPill({
       <span className={`text-[12.5px] font-medium capitalize ${DIFF_COLOR[difficulty]}`}>
         {difficulty}
       </span>
+      {totalRounds > 1 && (
+        <>
+          <span className="text-fg-3">·</span>
+          <span className="text-[12.5px] text-fg-2 tabular-nums">
+            Round {round}/{totalRounds}
+          </span>
+        </>
+      )}
       <span className="text-fg-3">
         <ChevronDown size={15} />
       </span>

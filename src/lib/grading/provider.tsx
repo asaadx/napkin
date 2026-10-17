@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { readInterview } from "../interview";
 import { loadTranscript } from "../voice/storage";
 import { mockGrade } from "./mockGrade";
 import { sceneStorageKey, summarizeScene } from "./scene";
@@ -43,6 +44,12 @@ function isSubmission(v: unknown): v is Submission {
     Array.isArray((s.result as GradeResult).dimensions)
   );
 }
+/** Older saves predate rounds: treat them as round 1 with nothing asked. */
+function normalizeSubmission(s: Submission): Submission {
+  const round = typeof s.round === "number" && s.round >= 1 ? s.round : 1;
+  const asked = Array.isArray(s.asked) ? s.asked.filter((id) => typeof id === "string") : [];
+  return round === s.round && asked.length === s.asked?.length ? s : { ...s, round, asked };
+}
 
 function readSubmissions(slug: string): Submission[] {
   let raw: string | null = null;
@@ -57,7 +64,7 @@ function readSubmissions(slug: string): Submission[] {
   if (raw) {
     try {
       const parsed: unknown = JSON.parse(raw);
-      value = Array.isArray(parsed) ? parsed.filter(isSubmission) : EMPTY;
+      value = Array.isArray(parsed) ? parsed.filter(isSubmission).map(normalizeSubmission) : EMPTY;
     } catch {
       value = EMPTY;
     }
@@ -123,7 +130,11 @@ export function GradingProvider({
   children,
 }: {
   slug: string;
-  /** The prompt being graded. Optional, but without it requirement coverage can't be checked. */
+  /**
+   * The prompt being graded: `{ title, functional?, rounds?, clarifying? }`. A full `Prompt`
+   * can be passed as is. Optional, but without it requirement coverage can't be checked,
+   * and without `rounds` every submission is graded as round 1.
+   */
   prompt?: GradingPrompt;
   children: ReactNode;
 }) {
@@ -145,12 +156,18 @@ export function GradingProvider({
       const transcript = loadTranscript(slug);
       const transcriptText = transcript.segments.map((s) => s.text).join(" ");
       const scene = summarizeScene(readScene(slug));
+      const totalRounds = Math.max(1, ...(prompt?.rounds ?? []).map((r) => r.index));
+      const interview = readInterview(slug);
+      const round = Math.min(Math.max(1, interview.round), totalRounds);
+      const asked = [...interview.asked];
       const result = mockGrade({
         prompt: prompt ?? { title: slug.replace(/-/g, " ") },
         transcriptText,
         shapeKinds: scene.shapeKinds,
         diagramLabels: scene.labels,
         durationMs: transcript.elapsedMs,
+        round,
+        asked,
       });
       const now = Date.now();
       const submission: Submission = {
@@ -159,6 +176,8 @@ export function GradingProvider({
         durationMs: transcript.elapsedMs,
         transcriptWords: transcriptText.split(/\s+/).filter(Boolean).length,
         shapeCount: scene.shapeKinds.filter((k) => k !== "text").length,
+        round,
+        asked,
         result,
         mocked: true,
       };

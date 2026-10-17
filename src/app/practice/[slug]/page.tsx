@@ -44,8 +44,8 @@ async function PracticeWorkspace({ params }: Pick<PageProps<"/practice/[slug]">,
       prompt={{
         title: prompt.title,
         functional: prompt.functional,
-        nonFunctional: prompt.nonFunctional,
-        scale: prompt.scale,
+        rounds: prompt.rounds,
+        clarifying: prompt.clarifying,
       }}
     >
       <Workspace prompt={prompt} prompts={prompts} />

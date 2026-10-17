@@ -13,7 +13,7 @@ Then open http://localhost:3000.
 
 ## How to add a prompt
 
-Add a Markdown file at `prompts/<slug>.md` with YAML frontmatter:
+Add a Markdown file at `prompts/<slug>.md` with YAML frontmatter. Each prompt is an interview in rounds: the candidate starts with only the functional requirements, and the interviewer adds constraints round by round.
 
 ```markdown
 ---
@@ -21,19 +21,25 @@ title: Design a URL Shortener
 slug: url-shortener          # must match the file name
 difficulty: easy             # easy | medium | hard
 summary: One-sentence description shown on the home page list.
-functional:
+functional:                  # Round 1 ("Core design"): the only requirements shown at the start
   - Users can shorten a long URL
-non_functional:
-  - Low latency redirects (p99 < 100ms)
-scale:
-  - 100M new URLs per day
+rounds:                      # Rounds 2..N, in order (2 or 3 entries)
+  - title: Scale it
+    interviewer: "Now say we're doing 100M new URLs a day. What breaks first?"
+    constraints:
+      - 100M new URLs per day
+clarifying:                  # "Ask the interviewer" questions (3-4)
+  - id: scale                # unique within the prompt, kebab-case
+    question: "What scale should I design for?"
+    answer: "About 100M new URLs a day."
+    round: 2                 # the round whose info this reveals early (2..N)
 hints:
   - Think about how you generate unique short codes
 ---
-Optional longer Markdown body with context.
+The interviewer's Round 1 opening: 2-4 sentences, including what's out of scope.
 ```
 
-`title`, `slug`, `difficulty`, and `summary` are required; the lists are optional. Invalid files fail the build with a message naming the file. Prompts are sorted by difficulty, then title.
+`title`, `slug`, `difficulty`, and `summary` are required. Quote strings that contain colons or start with special characters. Invalid files fail the build with a message naming the file. Prompts are sorted by difficulty, then title.
 
 ## Roadmap
 

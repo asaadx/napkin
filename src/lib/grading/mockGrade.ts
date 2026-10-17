@@ -15,6 +15,7 @@ import {
   type DimensionScore,
   type GradeDimension,
   type GradeResult,
+  type GradingClarifying,
   type GradingPrompt,
   type Improvement,
   type LevelSignal,
@@ -28,7 +29,38 @@ export type MockGradeInput = {
   durationMs: number;
   /** Text labels on the diagram, if known. */
   diagramLabels?: string[];
+  /** The interview round reached (1-based). Only constraints up to this round are graded. Defaults to 1. */
+  round?: number;
+  /** Ids of the clarifying questions the candidate asked. */
+  asked?: string[];
 };
+
+export type RevealedScope = {
+  /** Round 1 requirements (the functional list). */
+  core: string[];
+  /** Constraints from rounds 2..round. */
+  later: string[];
+  /** Clarifying questions asked, in the order asked (unknown ids are ignored). */
+  askedQuestions: GradingClarifying[];
+  /** Answers to asked questions whose round hasn't been reached yet. */
+  early: string[];
+  /** Everything the candidate has been told: core, later, then early answers. */
+  constraints: string[];
+};
+
+/** What the candidate has been told so far: rounds up to `round`, plus answers to the questions they asked. */
+export function revealedScope(prompt: GradingPrompt, round = 1, asked: readonly string[] = []): RevealedScope {
+  const rounds = prompt.rounds ?? [];
+  const core = rounds.find((r) => r.index === 1)?.constraints ?? prompt.functional ?? [];
+  const later = rounds
+    .filter((r) => r.index > 1 && r.index <= round)
+    .sort((a, b) => a.index - b.index)
+    .flatMap((r) => r.constraints);
+  const byId = new Map((prompt.clarifying ?? []).map((q) => [q.id, q]));
+  const askedQuestions = [...new Set(asked)].map((id) => byId.get(id)).filter((q): q is GradingClarifying => !!q);
+  const early = askedQuestions.filter((q) => q.round > round).map((q) => q.answer);
+  return { core, later, askedQuestions, early, constraints: [...new Set([...core, ...later, ...early])] };
+}
 
 /** Below this many words with a blank canvas, the attempt is too thin to grade. */
 export const MIN_WORDS = 60;
@@ -306,53 +338,73 @@ export function mockGrade(input: MockGradeInput): GradeResult {
     : "";
   const talked = words >= 30;
   const weights = weightsFor(input.prompt.title);
-  const scale = input.prompt.scale ?? [];
-  const scaleExample = scale[0] ? `"${clip(scale[0], 60)}"` : "the stated scale numbers";
+  const scope = revealedScope(input.prompt, Math.max(1, Math.floor(input.round ?? 1)), input.asked ?? []);
+  // Only numbers the candidate has actually been given count as "stated scale".
+  const scaleLine = [...scope.later, ...scope.early].find((l) => /\d/.test(l));
+  const scaleRevealed = !!scaleLine;
+  const scaleExample = scaleLine ? `"${clip(scaleLine, 60)}"` : "an assumed load";
+  // Don't weigh estimation and scaling as heavily before the interviewer has pushed on them.
+  if (!scaleRevealed) weights[1] *= 0.5;
+  if (!scope.later.length && !scope.early.length) weights[4] *= 0.6;
 
   // 1. Requirements & scoping ------------------------------------------------
-  const requirements = [...(input.prompt.functional ?? []), ...(input.prompt.nonFunctional ?? [])];
+  const requirements = scope.constraints;
   const coverage = requirementCoverage(lower, requirements);
   const clarify = present(lower, CLARIFY);
-  const reqPoints = requirements.length
-    ? coverage.ratio * 2 + Math.min(clarify.length, 3) * 0.5
-    : Math.min(clarify.length, 3) * 0.85;
-  const reqScore = talked ? bucket(reqPoints, 2.6, 1.6, 0.6) : 1;
+  const askedQs = scope.askedQuestions;
+  const canAsk = (input.prompt.clarifying?.length ?? 0) > 0;
+  const askedPoints = Math.min(askedQs.length, 2) * 0.5;
+  const reqPoints =
+    (requirements.length
+      ? coverage.ratio * 2 + Math.min(clarify.length, 3) * 0.5
+      : Math.min(clarify.length, 3) * 0.85) + askedPoints;
+  const reqScore: DimensionScore = talked ? bucket(reqPoints, 2.6, 1.6, 0.6) : askedQs.length ? 2 : 1;
   const firstMissed = coverage.missed[0];
+  const askedNote = askedQs.length
+    ? `Asked the interviewer ${list(askedQs.map((q) => `"${clip(q.question, 60)}"`))}.`
+    : "";
+  const askTip = canAsk && !askedQs.length ? " Asking the interviewer a clarifying question or two would have pinned this down." : "";
   const req: Scored = {
     name: "Requirements & scoping",
     score: reqScore,
     weight: weights[0],
     evidence:
-      reqScore === 1 && !clarify.length
-        ? "Not covered: the transcript never states requirements or assumptions."
+      reqScore === 1 && !clarify.length && !askedQs.length
+        ? "Not covered: the transcript never states requirements or assumptions, and no clarifying questions were asked."
         : [
+            askedNote,
             quoteFirst(transcript, clarify) ?? "",
             requirements.length
-              ? `Touched ${coverage.covered.length} of ${requirements.length} stated requirements.`
+              ? `Touched ${coverage.covered.length} of ${requirements.length} requirements revealed so far.`
               : "",
           ]
             .filter(Boolean)
             .join(" "),
     feedback: [
       "",
-      firstMissed
-        ? `You moved into the design without confirming what it has to do; "${clip(firstMissed, 70)}" never came up. Restate the functional and non-functional requirements in your own words before drawing anything.`
-        : "You moved into the design without confirming what it has to do. Restate the requirements and say what you're assuming before drawing anything.",
-      firstMissed
+      (firstMissed
+        ? `You moved into the design without confirming what it has to do; "${clip(firstMissed, 70)}" never came up. Restate the requirements in your own words before drawing anything.`
+        : "You moved into the design without confirming what it has to do. Restate the requirements and say what you're assuming before drawing anything.") + askTip,
+      (firstMissed
         ? `You named some requirements, but "${clip(firstMissed, 70)}" never came up. A strong answer confirms each one and says which it's deliberately leaving out.`
-        : "You touched the requirements but didn't state your assumptions. Say out loud what you are assuming and what you're leaving out of scope.",
+        : "You touched the requirements but didn't state your assumptions. Say out loud what you are assuming and what you're leaving out of scope.") + askTip,
       firstMissed
         ? `You covered most of the requirements and kept scope reasonable. The one that slipped was "${clip(firstMissed, 70)}"; check the list once more before moving on.`
-        : "You covered the requirements and kept scope reasonable. To push this to a 4, name the ambiguity you resolved and why you resolved it that way.",
-      "You confirmed the requirements, stated assumptions, and kept scope tight. This is the kind of opening that makes the rest of the interview easier.",
+        : askedQs.length
+          ? "You covered the requirements and asked the interviewer before assuming. To push this to a 4, say how each answer changed the design."
+          : "You covered the requirements and kept scope reasonable. To push this to a 4, name the ambiguity you resolved and why you resolved it that way.",
+      askedQs.length
+        ? "You confirmed the requirements, asked the interviewer about what was unclear, and kept scope tight. This is the kind of opening that makes the rest of the interview easier."
+        : "You confirmed the requirements, stated assumptions, and kept scope tight. This is the kind of opening that makes the rest of the interview easier.",
     ][reqScore],
-    strength: `You opened by pinning down scope${coverage.covered.length ? `, covering ${coverage.covered.length} of ${requirements.length} stated requirements` : ""} before designing.`,
+    strength: `You opened by pinning down scope${askedQs.length ? `, asking the interviewer ${plural(askedQs.length, "clarifying question")}` : ""}${coverage.covered.length ? `${askedQs.length ? " and" : ","} covering ${coverage.covered.length} of ${requirements.length} requirements` : ""} before designing.`,
     improvement: {
       issue: firstMissed
         ? `You never addressed "${clip(firstMissed, 70)}".`
         : "You didn't confirm requirements or state assumptions.",
-      what_strong_looks_like:
-        "Spend the first few minutes restating the functional and non-functional requirements, confirm the targets that matter, and say what is out of scope.",
+      what_strong_looks_like: canAsk
+        ? "Spend the first few minutes restating the requirements, ask the interviewer about the scale and targets you'd otherwise guess, and say what is out of scope."
+        : "Spend the first few minutes restating the functional and non-functional requirements, confirm the targets that matter, and say what is out of scope.",
     },
   };
 
@@ -371,7 +423,9 @@ export function mockGrade(input: MockGradeInput): GradeResult {
       : "Not covered: no numbers or estimates in the transcript.",
     feedback: [
       "",
-      `You never used the scale numbers. Start from ${scaleExample} and turn it into requests per second and storage, then let that pick your storage and caching strategy.`,
+      scaleRevealed
+        ? `You never used the scale numbers. Start from ${scaleExample} and turn it into requests per second and storage, then let that pick your storage and caching strategy.`
+        : "The interviewer hasn't given scale numbers yet, but you didn't ask or assume any. Ask what load to plan for, or state an assumption, and turn it into requests per second and storage.",
       `You mentioned ${est.length ? list(est.map((k) => k.label)) : "a number"} but didn't carry it through. A strong answer finishes the math, even roughly, and names the decision it changes.`,
       "Your numbers were in the right range and you used them. To reach a 4, point at the specific design choice each estimate forced, such as the shard count or cache size.",
       `You turned the scale numbers into concrete figures (${list(est.map((k) => k.label))}) and let them drive the design. That's how the scale section should work.`,

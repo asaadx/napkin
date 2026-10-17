@@ -1,16 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { mockGrade, quote, type MockGradeInput } from "./mockGrade";
-import { DIMENSION_NAMES } from "./types";
+import { mockGrade, quote, revealedScope, type MockGradeInput } from "./mockGrade";
+import { DIMENSION_NAMES, type GradingPrompt } from "./types";
 
-const prompt = {
+const functional = [
+  "Users can create a short link from a long URL",
+  "Visiting a short link redirects to the original URL",
+  "Users can set an optional custom alias",
+];
+
+const prompt: GradingPrompt = {
   title: "Design a URL Shortener",
-  functional: [
-    "Users can create a short link from a long URL",
-    "Visiting a short link redirects to the original URL",
-    "Users can set an optional custom alias",
+  functional,
+  rounds: [
+    { index: 1, title: "Core design", constraints: functional },
+    { index: 2, title: "Scale it", constraints: ["100M new links per month", "Read to write ratio of 100:1"] },
+    {
+      index: 3,
+      title: "Make it fast and safe",
+      constraints: ["Redirects complete in under 50ms (p99)", "Short codes must not be guessable"],
+    },
   ],
-  nonFunctional: ["Redirects complete in under 50ms (p99)", "Short codes must not be guessable"],
-  scale: ["100M new links per month", "Read to write ratio of 100:1"],
+  clarifying: [
+    { id: "scale", question: "What scale should I design for?", answer: "About 100M new links a month.", round: 2 },
+    { id: "latency", question: "How fast do redirects need to be?", answer: "Under 50ms at p99.", round: 3 },
+    { id: "analytics", question: "Do we need click analytics?", answer: "No, that's out of scope.", round: 2 },
+  ],
 };
 
 const strongTranscript = `Let me start with requirements. Users create a short link from a long URL,
@@ -32,6 +46,7 @@ const base = (over: Partial<MockGradeInput> = {}): MockGradeInput => ({
   transcriptText: "",
   shapeKinds: [],
   durationMs: 20 * 60_000,
+  round: 3,
   ...over,
 });
 
@@ -144,6 +159,82 @@ describe("mockGrade", () => {
   it("keeps the system prompt's tone: no exclamation marks", () => {
     const r = mockGrade(base({ transcriptText: strongTranscript, shapeKinds: ["rectangle"] }));
     expect(JSON.stringify(r)).not.toContain("!");
+  });
+});
+
+describe("revealedScope", () => {
+  it("reveals round 1 only by default", () => {
+    const s = revealedScope(prompt);
+    expect(s.constraints).toEqual(functional);
+    expect(s.later).toEqual([]);
+    expect(s.askedQuestions).toEqual([]);
+  });
+
+  it("adds each reached round's constraints", () => {
+    const s = revealedScope(prompt, 2);
+    expect(s.later).toEqual(["100M new links per month", "Read to write ratio of 100:1"]);
+    expect(s.constraints).not.toContain("Short codes must not be guessable");
+  });
+
+  it("adds answers to questions asked before their round, ignoring unknown and repeated ids", () => {
+    const s = revealedScope(prompt, 2, ["latency", "scale", "nope", "latency"]);
+    expect(s.askedQuestions.map((q) => q.id)).toEqual(["latency", "scale"]);
+    expect(s.early).toEqual(["Under 50ms at p99."]);
+    expect(s.constraints.at(-1)).toBe("Under 50ms at p99.");
+  });
+
+  it("falls back to functional when rounds are missing", () => {
+    expect(revealedScope({ title: "x", functional: ["a"] }, 3).constraints).toEqual(["a"]);
+  });
+});
+
+describe("mockGrade with rounds", () => {
+  const round1Transcript = `Let me start with requirements. Users create a short link from a long URL, visiting
+the short link redirects to the original URL, and a custom alias is optional. I'll assume analytics is out
+of scope. The request goes to a load balancer, then a stateless service tier, then the database. The API is
+POST /links and GET /{code}. Schema is a table keyed by short code, because the hot query is a lookup by code.`;
+
+  it("doesn't penalize constraints from rounds not reached yet", () => {
+    const r1 = mockGrade(base({ transcriptText: round1Transcript, round: 1 }));
+    const r3 = mockGrade(base({ transcriptText: round1Transcript, round: 3 }));
+    const req1 = r1.dimensions[0];
+    const req3 = r3.dimensions[0];
+    expect(req1.evidence).toMatch(/Touched 3 of 3 requirements revealed so far/);
+    expect(req3.evidence).toMatch(/of 7 requirements revealed so far/);
+    expect(req1.score).toBeGreaterThanOrEqual(req3.score);
+    expect(JSON.stringify(r1)).not.toMatch(/guessable|50ms|100M/);
+    expect(r1.overall_score).toBeGreaterThan(r3.overall_score);
+  });
+
+  it("grades round 1 estimation without stated numbers", () => {
+    const r = mockGrade(base({ transcriptText: round1Transcript, round: 1 }));
+    const est = r.dimensions[1];
+    expect(est.feedback).toMatch(/hasn't given scale numbers yet/);
+  });
+
+  it("uses a scale number revealed early by a clarifying answer", () => {
+    const talk = "We have a server that handles links and a client that calls it. ".repeat(6);
+    const r = mockGrade(base({ transcriptText: talk, round: 1, asked: ["scale"] }));
+    expect(r.dimensions[1].feedback).toContain("About 100M new links a month.");
+  });
+
+  it("credits clarifying questions and names them in the evidence", () => {
+    const talk = "The client sends a request to the service, which stores the link in the database. ".repeat(5);
+    const without = mockGrade(base({ transcriptText: talk, round: 2 }));
+    const withQs = mockGrade(base({ transcriptText: talk, round: 2, asked: ["scale", "analytics"] }));
+    expect(withQs.dimensions[0].score).toBeGreaterThan(without.dimensions[0].score);
+    expect(withQs.dimensions[0].evidence).toContain(
+      'Asked the interviewer "What scale should I design for?" and "Do we need click analytics?".',
+    );
+    expect(without.dimensions[0].evidence).not.toMatch(/Asked the interviewer/);
+    expect(without.dimensions[0].feedback).toMatch(/Asking the interviewer/);
+  });
+
+  it("ignores asked ids the prompt doesn't have", () => {
+    const talk = "The client sends a request to the service, which stores the link in the database. ".repeat(5);
+    const a = mockGrade(base({ transcriptText: talk, round: 2 }));
+    const b = mockGrade(base({ transcriptText: talk, round: 2, asked: ["made-up"] }));
+    expect(b).toEqual(a);
   });
 });
 

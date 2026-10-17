@@ -9,7 +9,16 @@ import { formatElapsed } from "@/lib/voice";
  * panel, then a list of past attempts. Lives in a ~340px side card that
  * already scrolls, so this component never sets its own overflow.
  */
-export function SubmissionsTab() {
+type RoundTitle = { index: number; title: string };
+
+/** "Round 2 · Scale it", or null for submissions saved before rounds existed. */
+function roundLabel(round: number | undefined, rounds: RoundTitle[]): string | null {
+  if (typeof round !== "number" || round < 1) return null;
+  const title = rounds.find((r) => r.index === round)?.title;
+  return title ? `Round ${round} · ${title}` : `Round ${round}`;
+}
+
+export function SubmissionsTab({ rounds = [] }: { rounds?: RoundTitle[] }) {
   const { submissions, status } = useGrading();
   const grading = status === "grading";
 
@@ -37,13 +46,19 @@ export function SubmissionsTab() {
       {grading ? (
         <GradingSkeleton />
       ) : selected ? (
-        <Result key={selected.id} submission={selected} isLatest={selected.id === latestId} />
+        <Result
+          key={selected.id}
+          submission={selected}
+          isLatest={selected.id === latestId}
+          roundText={roundLabel(selected.round, rounds)}
+        />
       ) : (
         <EmptyState />
       )}
       {submissions.length > 0 && (
         <History
           submissions={submissions}
+          rounds={rounds}
           selectedId={grading ? null : (selected?.id ?? null)}
           onOpen={open}
         />
@@ -158,7 +173,15 @@ const dateFmt = new Intl.DateTimeFormat(undefined, {
 });
 const shortDateFmt = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 
-function Result({ submission, isLatest }: { submission: Submission; isLatest: boolean }) {
+function Result({
+  submission,
+  isLatest,
+  roundText,
+}: {
+  submission: Submission;
+  isLatest: boolean;
+  roundText: string | null;
+}) {
   const r = submission.result;
   const level = levelOf(r);
   const duration = submission.durationMs > 0 ? formatElapsed(submission.durationMs) : "–";
@@ -171,6 +194,11 @@ function Result({ submission, isLatest }: { submission: Submission; isLatest: bo
           {isLatest ? "Latest · " : ""}
           {dateFmt.format(submission.createdAt)}
         </p>
+        {roundText && (
+          <p className="mt-1.5 self-start rounded-full bg-panel-2 px-2 py-px text-[11.5px] font-medium text-fg-2">
+            Graded on {roundText}
+          </p>
+        )}
       </header>
 
       <div className="grid grid-cols-2 gap-2.5">
@@ -313,10 +341,12 @@ function RubricRow({ dimension: d, index }: { dimension: GradeDimension; index: 
 
 function History({
   submissions,
+  rounds,
   selectedId,
   onOpen,
 }: {
   submissions: Submission[];
+  rounds: RoundTitle[];
   selectedId: string | null;
   onOpen: (id: string) => void;
 }) {
@@ -330,6 +360,7 @@ function History({
         {submissions.map((s, i) => {
           const level = levelOf(s.result);
           const on = s.id === selectedId;
+          const roundText = roundLabel(s.round, rounds);
           return (
             <li key={s.id} className={i ? "border-t border-line" : ""}>
               <button
@@ -346,6 +377,7 @@ function History({
                     {shortDateFmt.format(s.createdAt)}
                     {s.durationMs > 0 ? ` · ${formatElapsed(s.durationMs)}` : ""}
                   </span>
+                  {roundText && <span className="truncate text-[11.5px] text-fg-2">{roundText}</span>}
                 </span>
                 <span className="font-mono text-[13px] text-fg-2 tabular-nums">
                   {s.result.insufficient ? "–" : s.result.overall_score}
