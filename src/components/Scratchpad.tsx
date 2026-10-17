@@ -17,7 +17,7 @@ import type {
   ExcalidrawFreeDrawElement,
   ExcalidrawLinearElement,
 } from "@excalidraw/excalidraw/element/types";
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { ExcalidrawImperativeAPI, ExcalidrawProps } from "@excalidraw/excalidraw/types";
 import { useTheme } from "@/components/theme/useTheme";
 import { detectArrowhead, detectCylinder, recognizeShape } from "@/lib/shapes";
 import {
@@ -30,8 +30,23 @@ import {
   type ShapeSkeleton,
 } from "@/lib/scratchpad/convert";
 
+/**
+ * The editor plus our ☰ menu, loaded together. Excalidraw only drops its
+ * default menu for a <MainMenu> present on its first render, so the menu can't
+ * arrive in a later chunk.
+ */
 const Excalidraw = dynamic(
-  async () => (await import("@excalidraw/excalidraw")).Excalidraw,
+  async () => {
+    const { Excalidraw: Editor, MainMenu } = await import("@excalidraw/excalidraw");
+    function NapkinExcalidraw({ menu, ...props }: ExcalidrawProps & { menu: NapkinMenuProps }) {
+      return (
+        <Editor {...props}>
+          <NapkinMainMenu MainMenu={MainMenu} {...menu} />
+        </Editor>
+      );
+    }
+    return NapkinExcalidraw;
+  },
   {
     ssr: false,
     loading: () => (
@@ -43,7 +58,6 @@ const Excalidraw = dynamic(
 );
 
 type ExcalidrawModule = typeof import("@excalidraw/excalidraw");
-type ExcalidrawProps = React.ComponentProps<typeof Excalidraw>;
 type OnChange = NonNullable<ExcalidrawProps["onChange"]>;
 type InitialData = ExcalidrawProps["initialData"];
 
@@ -150,82 +164,103 @@ function buildElement(lib: ExcalidrawModule, skeleton: ShapeSkeleton): Excalidra
   return buildElements(lib, [skeleton])[0];
 }
 
-function SmartShapesToggle({
-  enabled,
-  onChange,
-}: {
-  enabled: boolean;
-  onChange: (next: boolean) => void;
-}) {
+/** Checkbox glyph for the main menu's toggle items (sits in the item's icon slot). */
+function CheckboxIcon({ checked }: { checked: boolean }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={enabled}
-      aria-label="Smart shapes"
-      onClick={() => onChange(!enabled)}
-      title="Turn freehand boxes, diamonds, database cylinders, lines and arrows into clean shapes"
-      className={`press flex h-9 select-none items-center gap-2 whitespace-nowrap rounded-full pl-3 pr-2 text-[12.5px] max-sm:pl-2 font-medium shadow-float ${
-        enabled ? "bg-panel text-fg" : "bg-panel text-fg-2"
-      } hover:text-fg`}
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
     >
-      <span className="max-sm:hidden">Smart shapes</span>
-      <span
-        aria-hidden
-        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-150 ${
-          enabled ? "bg-accent" : "bg-line"
-        }`}
-      >
-        <span
-          className={`inline-block size-3 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out-quint ${
-            enabled ? "translate-x-3.5" : "translate-x-0.5"
-          }`}
-        />
-      </span>
-    </button>
+      <rect x="4" y="4" width="16" height="16" rx="4" />
+      {checked && <path d="m8.5 12.2 2.4 2.4 4.6-5" strokeWidth="2.2" />}
+    </svg>
   );
 }
 
-function StyleToggle({
-  enabled,
-  onChange,
-}: {
-  enabled: boolean;
-  onChange: (next: boolean) => void;
-}) {
+type NapkinMenuProps = {
+  smartShapes: boolean;
+  onSmartShapes: (next: boolean) => void;
+  showStyle: boolean;
+  onShowStyle: (next: boolean) => void;
+  onLibrary: () => void;
+};
+
+/**
+ * Excalidraw's ☰ menu, trimmed to the useful defaults plus Library and our two
+ * settings (no Excalidraw links, socials or theme toggle; the app has its own
+ * theme). Rendering a <MainMenu> replaces Excalidraw's default one.
+ */
+function NapkinMainMenu({
+  MainMenu,
+  smartShapes,
+  onSmartShapes,
+  showStyle,
+  onShowStyle,
+  onLibrary,
+}: NapkinMenuProps & { MainMenu: ExcalidrawModule["MainMenu"] }) {
+  // Toggles keep the menu open, like a checkbox.
+  const keepOpen = (e: Event) => e.preventDefault();
   return (
-    <button
-      type="button"
-      aria-pressed={enabled}
-      aria-label={enabled ? "Hide style options" : "Show style options"}
-      onClick={() => onChange(!enabled)}
-      title={
-        enabled
-          ? "Hide style options (stroke, fill, fonts, opacity)"
-          : "Show style options (stroke, fill, fonts, opacity)"
-      }
-      className={`press flex size-9 shrink-0 select-none items-center justify-center rounded-full shadow-float ${
-        enabled ? "bg-panel text-accent" : "bg-panel text-fg-2"
-      } hover:text-fg`}
-    >
-      {/* Palette */}
-      <svg
-        aria-hidden
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <MainMenu>
+      <MainMenu.DefaultItems.LoadScene />
+      <MainMenu.DefaultItems.SaveToActiveFile />
+      <MainMenu.DefaultItems.Export />
+      <MainMenu.DefaultItems.SaveAsImage />
+      <MainMenu.DefaultItems.SearchMenu />
+      <MainMenu.Item icon={<LibraryIcon />} onSelect={onLibrary}>
+        Library
+      </MainMenu.Item>
+      <MainMenu.DefaultItems.Help />
+      <MainMenu.DefaultItems.ClearCanvas />
+      <MainMenu.Separator />
+      <MainMenu.Item
+        role="menuitemcheckbox"
+        aria-checked={smartShapes}
+        icon={<CheckboxIcon checked={smartShapes} />}
+        title="Turn freehand boxes, diamonds, database cylinders, lines and arrows into clean shapes"
+        onSelect={(e) => {
+          keepOpen(e);
+          onSmartShapes(!smartShapes);
+        }}
       >
-        <path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8-9-8Z" />
-        <circle cx="7.5" cy="11" r="1" fill="currentColor" stroke="none" />
-        <circle cx="10" cy="7" r="1" fill="currentColor" stroke="none" />
-        <circle cx="14.5" cy="7" r="1" fill="currentColor" stroke="none" />
-      </svg>
-    </button>
+        Smart shapes
+      </MainMenu.Item>
+      <MainMenu.Item
+        role="menuitemcheckbox"
+        aria-checked={showStyle}
+        icon={<CheckboxIcon checked={showStyle} />}
+        title="Stroke, fill, fonts and opacity options for the selection"
+        onSelect={(e) => {
+          keepOpen(e);
+          onShowStyle(!showStyle);
+        }}
+      >
+        Show style controls
+      </MainMenu.Item>
+      {/* Renders nothing unless UIOptions allows it (only with style controls shown). */}
+      <MainMenu.DefaultItems.ChangeCanvasBackground />
+    </MainMenu>
+  );
+}
+
+function LibraryIcon() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 19.5V5a2 2 0 0 1 2-2h13v15H6a2 2 0 0 0-2 2Zm0 0A2 2 0 0 0 6 22h13v-4" />
+    </svg>
   );
 }
 
@@ -264,6 +299,17 @@ export function Scratchpad({ slug }: { slug: string }) {
   const uiOptions = useMemo<ExcalidrawProps["UIOptions"]>(
     () => ({ canvasActions: { changeViewBackgroundColor: showStyle } }),
     [showStyle],
+  );
+
+  const menu = useMemo<NapkinMenuProps>(
+    () => ({
+      smartShapes,
+      onSmartShapes: toggleSmartShapes,
+      showStyle,
+      onShowStyle: writeShowStyle,
+      onLibrary: () => api.current?.toggleSidebar({ name: "default", tab: "library" }),
+    }),
+    [smartShapes, toggleSmartShapes, showStyle],
   );
 
   const initialData = useMemo<InitialData>(() => {
@@ -442,16 +488,6 @@ export function Scratchpad({ slug }: { slug: string }) {
     requestAnimationFrame(() => setTimeout(() => processStroke(id), 0));
   }, [processStroke]);
 
-  const renderTopRightUI = useCallback(
-    () => (
-      <div className="flex items-center gap-2">
-        <StyleToggle enabled={showStyle} onChange={writeShowStyle} />
-        <SmartShapesToggle enabled={smartShapes} onChange={toggleSmartShapes} />
-      </div>
-    ),
-    [showStyle, smartShapes, toggleSmartShapes],
-  );
-
   return (
     <div className={`napkin-canvas h-full w-full${showStyle ? "" : " napkin-minimal"}`}>
       <Excalidraw
@@ -459,9 +495,9 @@ export function Scratchpad({ slug }: { slug: string }) {
         initialData={initialData}
         onChange={handleChange}
         onPointerUp={handlePointerUp}
-        renderTopRightUI={renderTopRightUI}
         UIOptions={uiOptions}
         theme={theme}
+        menu={menu}
       />
     </div>
   );

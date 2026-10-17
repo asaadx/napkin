@@ -12,6 +12,15 @@
   --vd-ease: var(--ease-out-quint, cubic-bezier(0.23, 1, 0.32, 1));
 }
 
+/* Excalidraw's compact layout has a menu or panel open over the dock's spot. */
+.vd-dock {
+  transition: opacity 120ms ease-out;
+}
+.vd-dock[data-covered] {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .vd-pill {
   width: 44px;
   contain: layout;

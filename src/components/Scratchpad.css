@@ -15,3 +15,85 @@
 .napkin-minimal .App-mobile-menu:not(:has(.panelColumn > fieldset .ToolIcon_type_button)) {
   display: none;
 }
+
+/*
+ * Canvas controls (zoom and undo/redo) as one slim vertical group on the right
+ * edge, vertically centered, so the bottom edge holds only the mic dock.
+ * Excalidraw 0.18 has no prop for footer placement, so this restyles its
+ * desktop footer by class name. The footer is stretched over the whole canvas
+ * (it is already pointer-events: none; only its children take clicks) and the
+ * left footer is pinned to the right edge. `translate` rather than `transform`
+ * so Excalidraw's zen-mode slide (a transform) still composes.
+ */
+.napkin-canvas .layer-ui__wrapper__footer.App-menu_bottom {
+  inset: 0;
+  height: 100%;
+  padding: 0;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left {
+  position: absolute;
+  inset-inline-end: 1rem;
+  top: 50%;
+  translate: 0 -50%;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left section {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left .zoom-actions > .Stack {
+  grid-auto-flow: row;
+}
+/* + on top, − at the bottom. */
+.napkin-canvas .layer-ui__wrapper__footer-left .zoom-in-button {
+  order: -1;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left .zoom-out-button {
+  order: 1;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left :is(.zoom-button, .undo-redo-buttons button) {
+  width: 2.25rem !important;
+  height: 2.25rem;
+  padding: 0 !important;
+  justify-content: center;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left .reset-zoom-button {
+  font-size: 0.6875rem !important;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left .undo-redo-buttons {
+  grid-auto-flow: row;
+  margin: 0;
+}
+/* Corner radii follow the vertical stack. */
+.napkin-canvas .layer-ui__wrapper__footer-left :is(.zoom-in-button, .zoom-out-button, .undo-redo-buttons button) {
+  border-radius: 0 !important;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left :is(.zoom-in-button, .undo-button-container button) {
+  border-top-left-radius: var(--border-radius-lg) !important;
+  border-top-right-radius: var(--border-radius-lg) !important;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left :is(.zoom-out-button, .redo-button-container button) {
+  border-bottom-left-radius: var(--border-radius-lg) !important;
+  border-bottom-right-radius: var(--border-radius-lg) !important;
+}
+.napkin-canvas .layer-ui__wrapper__footer-left :is(.zoom-in-button, .zoom-out-button, .undo-redo-buttons button) .ToolIcon__icon {
+  border-radius: inherit !important;
+}
+
+/* Library opens from the ☰ menu (the top-right button clipped at narrow widths). */
+.napkin-canvas .default-sidebar-trigger {
+  display: none;
+}
+
+/*
+ * Help lives in the ☰ menu (and on "?"), so drop the corner help button, and
+ * the Excalidraw docs/blog/GitHub/YouTube links at the top of the help dialog
+ * (portaled to <body>, so not under .napkin-canvas; Excalidraw is the only
+ * thing that renders it).
+ */
+.napkin-canvas .layer-ui__wrapper__footer-right .help-icon,
+.excalidraw-modal-container .HelpDialog__header {
+  display: none;
+}

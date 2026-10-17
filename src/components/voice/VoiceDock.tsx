@@ -9,7 +9,7 @@ const noopSubscribe = () => () => {};
 
 /** Expanded pill width (keep in sync with .vd-dock[data-rec] .vd-pill in voice-dock.css). */
 const EXPANDED_W = 212;
-/** Minimum gap between the expanded pill and the container edges or Excalidraw controls. */
+/** Minimum gap between the expanded pill and the container edges (or Excalidraw's mobile bar). */
 const EDGE = 12;
 
 /**
@@ -46,9 +46,11 @@ function isTyping(target: EventTarget | null): boolean {
 /**
  * Centers the dock on the viewport (so it lines up with the top bar's centered
  * Submit) while it sits inside the canvas container, which is offset by the
- * side card. It clamps so the expanded pill never slides under the side card
- * or over Excalidraw's bottom-corner controls. Writes `left` directly; no
- * re-render.
+ * side card. It only clamps when the container is too narrow for the expanded
+ * pill to stay centered without sliding under the side card. Excalidraw's
+ * desktop controls sit on the right edge, so the bottom edge is free; its
+ * compact (mobile) layout has a full-width bottom bar, so there the dock rises
+ * above it. Writes `left`/`bottom`/`data-covered` directly; no re-render.
  */
 function useViewportCentered(ref: React.RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
@@ -57,18 +59,19 @@ function useViewportCentered(ref: React.RefObject<HTMLElement | null>) {
     if (!el || !parent) return;
     const update = () => {
       const r = parent.getBoundingClientRect();
-      // Keep clear of Excalidraw's bottom corners (zoom/undo, help) too.
-      const footer = (side: "left" | "right") =>
-        parent.querySelector(`.layer-ui__wrapper__footer-${side}`)?.getBoundingClientRect();
-      const fl = footer("left");
-      const fr = footer("right");
-      const lo = Math.max(EDGE, fl && fl.width ? fl.right - r.left + EDGE : 0);
-      const hi = Math.min(r.width - EDGE, fr && fr.width ? fr.left - r.left - EDGE : r.width);
       const half = EXPANDED_W / 2;
       const want = window.innerWidth / 2 - r.left;
       const x =
-        hi - lo < EXPANDED_W ? r.width / 2 : Math.min(Math.max(want, lo + half), hi - half);
+        r.width < EXPANDED_W + 2 * EDGE
+          ? r.width / 2
+          : Math.min(Math.max(want, EDGE + half), r.width - EDGE - half);
       el.style.left = `${Math.round(x)}px`;
+      const bar = parent.querySelector(".excalidraw--mobile .App-bottom-bar .App-toolbar")?.getBoundingClientRect();
+      el.style.bottom = bar && bar.height ? `${Math.round(r.bottom - bar.top + EDGE)}px` : "";
+      // There, the ☰ menu and style panel open upward from that bar, over the
+      // dock's spot; step aside while one is open.
+      const panel = parent.querySelector(".excalidraw--mobile :is(.dropdown-menu, .App-mobile-menu)");
+      el.toggleAttribute("data-covered", !!panel?.getBoundingClientRect().height);
     };
     let frame = 0;
     const schedule = () => {
