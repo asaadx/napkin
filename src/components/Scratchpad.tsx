@@ -7,8 +7,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import "@excalidraw/excalidraw/index.css";
+import "./Scratchpad.css";
 import type { ExcalidrawElementSkeleton } from "@excalidraw/excalidraw/data/transform";
 import type {
   ExcalidrawElement,
@@ -53,6 +55,7 @@ const CYLINDER_WINDOW_MS = 5000;
 /** How many recent unconverted strokes are tried as the other half of a cylinder. */
 const CYLINDER_CANDIDATES = 3;
 const SMART_SHAPES_KEY = "napkin:smartShapes";
+const SHOW_STYLE_KEY = "napkin:showStyle";
 const storageKey = (slug: string) => `napkin:scene:${slug}`;
 
 const PEN_TOOL = {
@@ -79,6 +82,51 @@ function loadSmartShapes(): boolean {
     return true;
   }
 }
+
+/**
+ * Whether Excalidraw's style panel (stroke, fill, fonts, opacity…) is shown.
+ * Read through useSyncExternalStore so the server render (and hydration)
+ * always sees the default, hidden.
+ */
+const showStyleListeners = new Set<() => void>();
+/** Last value set this session, so the toggle works even if storage throws. */
+let memoryShowStyle: boolean | null = null;
+
+function readShowStyle(): boolean {
+  try {
+    return window.localStorage.getItem(SHOW_STYLE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeShowStyle(next: boolean) {
+  try {
+    window.localStorage.setItem(SHOW_STYLE_KEY, String(next));
+  } catch {
+    // Preference just won't persist; the in-memory value below still applies.
+  }
+  memoryShowStyle = next;
+  showStyleListeners.forEach((fn) => fn());
+}
+
+function subscribeShowStyle(fn: () => void) {
+  showStyleListeners.add(fn);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === SHOW_STYLE_KEY) {
+      memoryShowStyle = null;
+      fn();
+    }
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    showStyleListeners.delete(fn);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+const getShowStyle = () => memoryShowStyle ?? readShowStyle();
+const getServerShowStyle = () => false;
 
 const isLinear = (el: ExcalidrawElement): el is ExcalidrawLinearElement =>
   el.type === "line" || el.type === "arrow";
@@ -138,6 +186,49 @@ function SmartShapesToggle({
   );
 }
 
+function StyleToggle({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={enabled}
+      aria-label={enabled ? "Hide style options" : "Show style options"}
+      onClick={() => onChange(!enabled)}
+      title={
+        enabled
+          ? "Hide style options (stroke, fill, fonts, opacity)"
+          : "Show style options (stroke, fill, fonts, opacity)"
+      }
+      className={`press flex size-9 shrink-0 select-none items-center justify-center rounded-full shadow-float ${
+        enabled ? "bg-panel text-accent" : "bg-panel text-fg-2"
+      } hover:text-fg`}
+    >
+      {/* Palette */}
+      <svg
+        aria-hidden
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8-9-8Z" />
+        <circle cx="7.5" cy="11" r="1" fill="currentColor" stroke="none" />
+        <circle cx="10" cy="7" r="1" fill="currentColor" stroke="none" />
+        <circle cx="14.5" cy="7" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    </button>
+  );
+}
+
 export function Scratchpad({ slug }: { slug: string }) {
   const { theme } = useTheme();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -166,6 +257,14 @@ export function Scratchpad({ slug }: { slug: string }) {
       // Preference just won't persist.
     }
   }, []);
+
+  const showStyle = useSyncExternalStore(subscribeShowStyle, getShowStyle, getServerShowStyle);
+
+  // With style hidden, also drop the main menu's canvas background picker.
+  const uiOptions = useMemo<ExcalidrawProps["UIOptions"]>(
+    () => ({ canvasActions: { changeViewBackgroundColor: showStyle } }),
+    [showStyle],
+  );
 
   const initialData = useMemo<InitialData>(() => {
     const saved = typeof window === "undefined" ? null : loadScene(slug);
@@ -344,18 +443,24 @@ export function Scratchpad({ slug }: { slug: string }) {
   }, [processStroke]);
 
   const renderTopRightUI = useCallback(
-    () => <SmartShapesToggle enabled={smartShapes} onChange={toggleSmartShapes} />,
-    [smartShapes, toggleSmartShapes],
+    () => (
+      <div className="flex items-center gap-2">
+        <StyleToggle enabled={showStyle} onChange={writeShowStyle} />
+        <SmartShapesToggle enabled={smartShapes} onChange={toggleSmartShapes} />
+      </div>
+    ),
+    [showStyle, smartShapes, toggleSmartShapes],
   );
 
   return (
-    <div className="napkin-canvas h-full w-full">
+    <div className={`napkin-canvas h-full w-full${showStyle ? "" : " napkin-minimal"}`}>
       <Excalidraw
         excalidrawAPI={handleApi}
         initialData={initialData}
         onChange={handleChange}
         onPointerUp={handlePointerUp}
         renderTopRightUI={renderTopRightUI}
+        UIOptions={uiOptions}
         theme={theme}
       />
     </div>

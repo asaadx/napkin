@@ -1,0 +1,17 @@
+/*
+ * Minimal mode (Scratchpad's "Style" toggle off): hide Excalidraw's style
+ * panel. 0.18 has no prop for it, so this keys off its class names. Inside the
+ * panel only the Align and Actions groups (duplicate, delete, group, link)
+ * stay; they are the only rows built from ToolIcon buttons. The island itself
+ * goes when nothing is left (e.g. the pen tool's stroke/opacity panel).
+ * Shortcuts still work; the panel is only hidden.
+ */
+.napkin-minimal :is(.selected-shape-actions, .App-mobile-menu)
+  .panelColumn
+  > :not(fieldset:has(.ToolIcon_type_button)) {
+  display: none;
+}
+.napkin-minimal .selected-shape-actions:not(:has(.panelColumn > fieldset .ToolIcon_type_button)),
+.napkin-minimal .App-mobile-menu:not(:has(.panelColumn > fieldset .ToolIcon_type_button)) {
+  display: none;
+}

@@ -14,7 +14,6 @@ import {
   type RecognitionResult,
   type Segment,
 } from "./transcript";
-import { useMicLevel } from "./useMicLevel";
 
 export type SpeechStatus = "idle" | "listening" | "error";
 
@@ -31,8 +30,6 @@ export type SpeechTranscript = {
   interim: string;
   /** Total recorded time across start/stop, persisted with the transcript. */
   elapsedMs: number;
-  /** Mic level 0–1 while listening, or null if unavailable. */
-  level: number | null;
 };
 
 const TICK_MS = 250;
@@ -227,8 +224,6 @@ export function useSpeechTranscript(slug: string): SpeechTranscript {
     [],
   );
 
-  const level = useMicLevel(status === "listening");
-
   return {
     supported,
     status,
@@ -239,6 +234,5 @@ export function useSpeechTranscript(slug: string): SpeechTranscript {
     segments: transcript.segments,
     interim: transcript.interim,
     elapsedMs,
-    level,
   };
 }

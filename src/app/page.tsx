@@ -1,5 +1,5 @@
 import { SiteFooter } from "@/components/nav/SiteFooter";
-import { SiteNav } from "@/components/nav/SiteNav";
+import { SiteHeader } from "@/components/nav/SiteHeader";
 import { ProblemList } from "@/components/problems/ProblemList";
 import { toPromptSummaries } from "@/components/problems/summaries";
 import { getAllPrompts } from "@/lib/prompts";
@@ -8,7 +8,7 @@ export default function Home() {
   const prompts = toPromptSummaries(getAllPrompts());
   return (
     <>
-      <SiteNav />
+      <SiteHeader />
       <main className="flex-1">
         <div className="mx-auto w-full max-w-[1100px] px-4 pt-8 pb-16 sm:px-6 sm:pt-10">
           <ProblemList prompts={prompts} variant="page" />
