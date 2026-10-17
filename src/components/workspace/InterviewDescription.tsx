@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { DifficultyBadge } from "@/components/DifficultyBadge";
+import { BotIcon } from "@/components/icons/BotIcon";
 import type { useInterview } from "@/lib/interview";
 import type { ClarifyingQuestion, Prompt, Round } from "@/lib/prompts";
 import { ArrowRight, ChevronDown, Flag, More, Restart } from "./icons";
@@ -203,9 +204,9 @@ function InterviewerLine({ round }: { round: Round }) {
       <figcaption className="mb-2 flex items-center gap-2 text-[12px] text-fg-2">
         <span
           aria-hidden
-          className="grid size-[22px] place-items-center rounded-full bg-accent-soft text-[10.5px] font-semibold text-accent"
+          className="grid size-[22px] place-items-center rounded-full bg-accent-soft text-accent"
         >
-          IN
+          <BotIcon className="size-[14px]" />
         </span>
         <span className="font-medium text-fg">Interviewer</span>
       </figcaption>
@@ -328,9 +329,9 @@ function AskTheInterviewer({
                   <p className="mt-1.5 flex gap-2 text-fg">
                     <span
                       aria-hidden
-                      className="mt-[3px] grid size-4 shrink-0 place-items-center rounded-full bg-accent-soft text-[8.5px] font-semibold text-accent"
+                      className="mt-[3px] grid size-4 shrink-0 place-items-center rounded-full bg-accent-soft text-accent"
                     >
-                      IN
+                      <BotIcon className="size-[11px]" />
                     </span>
                     <span className="min-w-0 flex-1">
                       {q.answer}

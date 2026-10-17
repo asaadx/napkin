@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export default function Home() {
   return (
     <>
-      <SiteHeader actions={<StartLink />} />
+      <SiteHeader pill actions={<StartLink />} />
       <Landing />
       <SiteFooter />
     </>

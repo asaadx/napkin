@@ -72,6 +72,7 @@ const PATHS = {
       <path d="M20 9H9a5 5 0 0 0 0 10h3" />
     </>
   ),
+  check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
   plus: <path d="M12 5v14M5 12h14" />,
   minus: <path d="M5 12h14" />,
   panel: (

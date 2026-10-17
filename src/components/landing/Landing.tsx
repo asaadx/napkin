@@ -1,3 +1,4 @@
+import { ChapterRail } from "./ChapterRail";
 import { CHAPTERS } from "./copy";
 import { k, kc, SC, TL } from "./anim";
 import { Moment, PinnedWorkspace } from "./Stage";
@@ -43,17 +44,7 @@ export function Landing() {
                   </div>
                 ))}
               </div>
-              <div className="rail">
-                {CHAPTERS.map((c, i) => (
-                  <div key={c.lab}>
-                    <span className="n">{c.lab}</span>
-                    <span>{c.rail}</span>
-                    <span className="seg">
-                      <b {...k("fill", TL, (i / 4) * SC, ((i + 1) / 4) * SC)} />
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <ChapterRail />
             </div>
             <div {...kc("pf-right", "pullBack", TL, 0.8, 1)}>
               <PinnedWorkspace />

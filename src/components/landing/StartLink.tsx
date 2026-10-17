@@ -2,8 +2,8 @@ import Link from "next/link";
 import { Ic } from "./icons";
 
 const SIZE = {
-  md: "h-[34px] gap-[7px] rounded-[9px] px-3.5 text-[13.5px]",
-  lg: "h-[42px] gap-[7px] rounded-[10px] px-[18px] text-[14.5px]",
+  md: "h-[34px] gap-[7px] rounded-full px-4 text-[13.5px]",
+  lg: "h-[42px] gap-[7px] rounded-full px-5 text-[14.5px]",
 } as const;
 
 /** The one call to action. Every "Start practicing" goes to the problem list. */
