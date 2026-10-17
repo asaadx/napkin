@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { PromptPanel } from "@/components/PromptPanel";
 import { Scratchpad } from "@/components/Scratchpad";
 import { TopBar } from "@/components/TopBar";
+import { VoicePanel } from "@/components/VoicePanel";
 import { getAllPrompts, getPrompt } from "@/lib/prompts";
 
 export function generateStaticParams() {
@@ -27,8 +28,11 @@ export default async function PracticePage({ params }: PageProps<"/practice/[slu
       <TopBar title={prompt.title} />
       <div className="flex min-h-0 flex-1">
         <PromptPanel prompt={prompt} />
-        <main className="min-w-0 flex-1">
-          <Scratchpad key={prompt.slug} slug={prompt.slug} />
+        <main className="flex min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1">
+            <Scratchpad key={prompt.slug} slug={prompt.slug} />
+          </div>
+          <VoicePanel key={prompt.slug} slug={prompt.slug} />
         </main>
       </div>
     </div>
